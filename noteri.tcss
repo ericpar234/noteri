@@ -1,20 +1,22 @@
 DirectoryTree {
     width: auto;
-    max-width: 1fr;
-    dock: right;
     scrollbar-size: 1 1;
     dock: left;
 }
 
+#md {
+    width: 50%;
+#    dock: right;
+    scrollbar-gutter: stable;
+    scrollbar-size: 1 1;
+}
+
 Markdown {
     width: 100%;
-    scrollbar-size: 1 1;
-    dock: left;
+    height: 1fr;
+    height: auto;
 }
 TextArea {
-    width: auto;
-    min-width: 50%;
-    max-width: 4fr;
-    # min-width: 50%;
+    width: 100%;
     scrollbar-size: 1 1;
 }
