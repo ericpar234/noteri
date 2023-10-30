@@ -1,0 +1,20 @@
+DirectoryTree {
+    width: auto;
+    max-width: 1fr;
+    dock: right;
+    scrollbar-size: 1 1;
+    dock: left;
+}
+
+Markdown {
+    width: 100%;
+    scrollbar-size: 1 1;
+    dock: left;
+}
+TextArea {
+    width: auto;
+    min-width: 50%;
+    max-width: 4fr;
+    # min-width: 50%;
+    scrollbar-size: 1 1;
+}
