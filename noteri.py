@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch
+from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button
 from textual.containers import Horizontal, ScrollableContainer
 from textual.screen import ModalScreen
 from textual.validation import Length
@@ -216,6 +216,34 @@ class InputPopup(ModalScreen):
         self.app.post_message(Noteri.FileSystemCallback(self.callback, (event.input.value,)))
         self.app.pop_screen()
 
+class YesNoPopup(ModalScreen):
+
+    BINDINGS = [ ("escape", "pop_screen") ]
+
+    def __init__(self, title, callback, message="") -> None:
+        super().__init__()
+        self.callback = callback
+        self.title = title
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.title)
+        yield Label(self.message)
+        yield Button("Yes", id="yes")
+        yield Button("No", id="no", variant="error")
+
+    @on(Button.Pressed, "#yes")
+    def yes(self, event:Button.Pressed):
+        self.app.post_message(Noteri.FileSystemCallback(self.callback, (True,)))
+        self.app.pop_screen()
+    
+    @on(Button.Pressed, "#no")
+    def no(self, event:Button.Pressed):
+        self.app.post_message(Noteri.FileSystemCallback(self.callback, (False,)))
+        self.app.pop_screen()
+    
+        
+
 class Noteri(App):
     CSS_PATH = "noteri.tcss"
     COMMANDS = App.COMMANDS | {FileCommands} | {WidgetCommands}
@@ -223,6 +251,8 @@ class Noteri(App):
     filename = None
     languages = []
     clipboard = ""
+    unsaved_changes = False
+    action_stack = []
 
     BINDINGS = [
         Binding("ctrl+n", "new", "New File"),
@@ -278,11 +308,13 @@ class Noteri(App):
 
     @on(TextArea.Changed)
     def text_area_changed(self, event:TextArea.Changed) -> None:
+        self.unsaved_changes = True
         self.query_one("Markdown", expect_type=Markdown).update(event.text_area.text)
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event:DirectoryTree.FileSelected):
         self.open_file(event.path)
+        self.unsaved_changes = False
 
     @on(Markdown.LinkClicked)
     def linked_clicked(self, message:Markdown.LinkClicked ):
@@ -302,7 +334,12 @@ class Noteri(App):
             return
         if path.is_dir():
             return
-        
+
+        if self.unsaved_changes:
+            self.action_stack.insert(0, partial(self.open_file, path))
+            self.push_screen(YesNoPopup("Unsaved Changes",  self.unsaved_changes_callback, message=f"Save Changes to {self.filename} ?"))
+            return
+
         path = Path(path)
         
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -310,7 +347,7 @@ class Noteri(App):
         try:
             with open(path) as f:
                 text = f.read()
-                ta.clear()
+                #ta.clear()
                 ta.load_text(text)
                 self.filename = path
         except FileNotFoundError as e:
@@ -319,13 +356,7 @@ class Noteri(App):
         except UnicodeDecodeError as e:
             self.notify(f"File is not a text file: {path}", severity="error", title="UnicodeDecodeError")
             return
-
-        if path.suffix == ".md":
-            self.query_one("Markdown", expect_type=Markdown).display = True
-        else:
-            self.query_one("Markdown", expect_type=Markdown).display = False
-        
-        
+         
         file_extensions = {
             ".sh": "bash",
             ".css": "css",
@@ -344,7 +375,15 @@ class Noteri(App):
             ta.language = file_extensions[path.suffix]
         else:
             ta.language = None
+
+        if path.suffix == ".md":
+            self.query_one("#md", expect_type=Markdown).display = True
+        else:
+            self.query_one("#md", expect_type=Markdown).display = False
+
         self.configure_widths()
+
+        self.unsaved_changes = False
         
 
     def toggle_widget_display(self, id):
@@ -393,10 +432,11 @@ class Noteri(App):
         filename = self.filename if new_filename is None else new_filename
 
         with open(filename, "w") as f:
-            f.write(self.query_one("TextArea", expect_type=TextArea).text)  
+            f.write(self.query_one("TextArea", expect_type=TextArea).text)
         self.notify(f"Saved {filename}", title="Saved")
         self.filename = filename
         self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        self.unsaved_changes = False
 
     def delete_file(self, filename):
         os.remove(filename)
@@ -436,8 +476,10 @@ class Noteri(App):
             return
         
         lines = md_table.strip().split('\n')
+        header_cols = lines[0].split('|')[1:-1]
         matrix = [line.split('|')[1:-1] for line in lines[2:]]
         matrix = [[cell.strip() for cell in row] for row in matrix if any(cell.strip() for cell in row)]
+        matrix.insert(0, [col.strip() for col in header_cols])  # Include headers in the matrix for width calculation
         matrix_transposed = list(zip(*matrix))
         matrix_transposed = [col for col in matrix_transposed if any(cell for cell in col)]
         matrix = list(zip(*matrix_transposed))
@@ -452,19 +494,20 @@ class Noteri(App):
             padding_right = padding_total - padding_left
             return ' ' * padding_left + cell + ' ' * padding_right
 
-        rebuilt_table = ['| ' + ' | '.join(center_cell(cell, width) for cell, width in zip(row, col_widths)) + ' |' for row in matrix]
-        header_cols = lines[0].split('|')[1:-1]
-        valid_indices = [i for i, col in enumerate(matrix_transposed) if any(cell for cell in col)]
-        rebuilt_header = '| ' + ' | '.join(center_cell(header_cols[i].strip(), col_widths[i]) for i in valid_indices) + ' |'
+        rebuilt_table = ['| ' + ' | '.join(center_cell(cell, width) for cell, width in zip(row, col_widths)) + ' |' for row in matrix[1:]]  # Exclude header row
+        rebuilt_header = '| ' + ' | '.join(center_cell(cell, width) for cell, width in zip(matrix[0], col_widths)) + ' |'
         rebuilt_separator = '|-' + '-|-'.join('-' * width for width in col_widths) + '-|'
         clean_table = '\n'.join([rebuilt_header, rebuilt_separator] + rebuilt_table)
 
     
         ta.replace(clean_table, ta.selection.start, ta.selection.end)
 
+    def unsaved_changes_callback(self, value):
+        if value:
+            self.save_file()
+        self.unsaved_changes = False
+        self.action_stack.pop()()
 
-
-            
 
     def action_new(self):
         self.push_screen(InputPopup(self.new_file, title="New File", validators=[Length(minimum=1)]))
@@ -505,7 +548,6 @@ class Noteri(App):
             return
         self.push_screen(MarkdownTablePopup(self.create_table, validators=[Length(minimum=1)]))
 
-    
     @on(FileSystemCallback)
     def callback_message(self, message:FileSystemCallback):
         message.callback(*message.input)
