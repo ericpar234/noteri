@@ -1,2 +1,3 @@
 textual
 tree_sitter_languages
+pyperclip

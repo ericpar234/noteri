@@ -1,11 +1,13 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input
+from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch
 from textual.containers import Horizontal, ScrollableContainer
 from textual.screen import ModalScreen
 from textual.validation import Length
 from textual.events import Event
 from textual import on
+from textual.binding import Binding
 
+import pyperclip 
 
 from functools import partial
 from pathlib import Path
@@ -14,14 +16,8 @@ import os
 import argparse
 from tree_sitter_languages import get_language
 
-# python_language = get_language("python")
-# python_highlight_query = (Path(__file__).parent / "python_highlights.scm").read_text()
 
-python_language = get_language("python")
-python_highlight_query = (Path(__file__).parent / "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/python.scm").read_text()
-markdown_language = get_language("markdown")
-markdown_highlight_query = (Path(__file__).parent / "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/markdown.scm").read_text()
-
+SCM_PATH = "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/"
 
 #TODO: File Exists new file check
 #TODO: 
@@ -136,6 +132,68 @@ class FileCommands(Provider):
                 partial(app.action_new_directory),
             )
 
+        # Cut
+        cut_command = f"Cut"
+        score = matcher.match(cut_command)
+        if score > 0:
+            yield Hit(
+                score,
+                matcher.highlight(cut_command),  
+                partial(app.action_cut),
+            )
+        # Copy
+        copy_command = f"Copy"
+        score = matcher.match(copy_command)
+        if score > 0:
+            yield Hit(
+                score,
+                matcher.highlight(copy_command),  
+                partial(app.action_copy),
+            )
+        # Paste
+        paste_command = f"Paste"
+        score = matcher.match(paste_command)
+        if score > 0:
+            yield Hit(
+                score,
+                matcher.highlight(paste_command),  
+                partial(app.action_paste),
+            )
+
+        # Table
+        table_command = f"Table"
+        score = matcher.match(table_command)
+        if score > 0:
+            yield Hit(
+                score,
+                matcher.highlight(table_command),  
+                partial(app.action_table),
+            )
+
+class MarkdownTablePopup(ModalScreen):
+    BINDINGS = [ ("escape", "pop_screen") ]
+
+    def __init__(self, callback, validators=None):
+        super().__init__()
+        self.callback = callback
+        self.validators = validators
+
+    def compose(self) -> ComposeResult:
+        yield Label("Header")
+        yield Switch(id="header")
+        yield Label("Rows")
+        yield Input(validators=self.validators, id="rows")
+        yield Label("Columns")
+        yield Input(validators=self.validators, id="columns")
+
+    @on(Input.Submitted)
+    def submitted(self, event:Input.Submitted):
+        rows = int(self.query_one("#rows", expect_type=Input).value)
+        columns = int(self.query_one("#columns", expect_type=Input).value)
+        header = self.query_one("#header", expect_type=Switch).value
+        self.app.post_message(Noteri.FileSystemCallback(self.callback, (rows, columns, header)))
+        self.app.pop_screen()
+
 class InputPopup(ModalScreen):
     BINDINGS = [ ("escape", "pop_screen") ]
 
@@ -155,7 +213,7 @@ class InputPopup(ModalScreen):
 
     @on(Input.Submitted)
     def submitted(self, event:Input.Submitted):
-        self.app.post_message(Noteri.FileSystemCallback(self.callback, event.input.value))
+        self.app.post_message(Noteri.FileSystemCallback(self.callback, (event.input.value,)))
         self.app.pop_screen()
 
 class Noteri(App):
@@ -163,13 +221,18 @@ class Noteri(App):
     COMMANDS = App.COMMANDS | {FileCommands} | {WidgetCommands}
     directory = "./"
     filename = None
+    languages = []
+    clipboard = ""
 
     BINDINGS = [
-        ("ctrl+n", "new", "New File"),
-        ("ctrl+s", "save", "Save File"),
-        ("shift+ctrl+s", "save_as", "Save As"),
-        ("ctrl+r", "rename", "Rename File"),
-        ("ctrl+d", "delete", "Delete File"),
+        Binding("ctrl+n", "new", "New File"),
+        Binding("ctrl+s", "save", "Save File"),
+        Binding("shift+ctrl+s", "save_as", "Save As"),
+        Binding("ctrl+r", "rename", "Rename File"),
+        Binding("ctrl+d", "delete", "Delete File"),
+        # Binding("ctrl+shift+x", "cut", "Cut Text", priority=True),
+        # Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
+        # Binding("ctrl+shift+v", "paste", "Paste Text", priority=True),
     ]
 
     class FileSystemCallback(Event):
@@ -193,8 +256,11 @@ class Noteri(App):
 
     def compose(self) -> ComposeResult:
         ta = TextArea()
-        ta.register_language(python_language, python_highlight_query)
-        ta.register_language(markdown_language, markdown_highlight_query)
+        for scm_file in Path(SCM_PATH).glob("*.scm"):
+            ta.register_language(get_language(scm_file.stem), scm_file.read_text())
+        
+        #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in ta.BINDINGS, and remove it
+        ta.BINDINGS = [b for b in ta.BINDINGS if b.key != "ctrl+x"]
 
         with Horizontal():
             yield DirectoryTree(self.directory)
@@ -225,11 +291,16 @@ class Noteri(App):
         if message.href[0] == "#":
             self.query_one("Markdown", expect_type=Markdown).goto_anchor(message.href[1:])
             return
-        self.open_file(message.href)
+        
+        #get subdirectory of filepath
+        path = Path(self.filename).parent / message.href
+        self.open_file(path)
 
     def open_file(self, path: Path) -> None:
 
         if path == None:
+            return
+        if path.is_dir():
             return
         
         path = Path(path)
@@ -258,6 +329,7 @@ class Noteri(App):
         file_extensions = {
             ".sh": "bash",
             ".css": "css",
+            ".tcss": "css",
             ".html": "html",
             ".json": "json",
             ".md": "markdown",
@@ -270,8 +342,10 @@ class Noteri(App):
 
         if path.suffix in file_extensions:
             ta.language = file_extensions[path.suffix]
-            self.notify(f"Loaded {file_extensions[path.suffix]}", title="Loaded")
+        else:
+            ta.language = None
         self.configure_widths()
+        
 
     def toggle_widget_display(self, id):
         widget = self.query_one(id)
@@ -343,6 +417,55 @@ class Noteri(App):
         os.remove(tmp)
         self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
     
+    def create_table(self, rows, columns, header):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        if header:
+            ta.insert(f"|   {'|   '.join([''] * columns)}|\n")
+            ta.insert(f"|{'|'.join(['---'] * columns)}|\n")
+        for i in range(rows):
+            ta.insert(f"|   {'|   '.join([''] * columns)}|\n")
+
+
+    def cleanup_table(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        md_table = ta.selected_text
+
+        if md_table == "":
+            return
+        if md_table == None:
+            return
+        
+        lines = md_table.strip().split('\n')
+        matrix = [line.split('|')[1:-1] for line in lines[2:]]
+        matrix = [[cell.strip() for cell in row] for row in matrix if any(cell.strip() for cell in row)]
+        matrix_transposed = list(zip(*matrix))
+        matrix_transposed = [col for col in matrix_transposed if any(cell for cell in col)]
+        matrix = list(zip(*matrix_transposed))
+
+        # Calculate column widths based on the widest content in each column
+        col_widths = [max(len(cell) for cell in col) for col in matrix_transposed]
+
+        # Centering content in each cell
+        def center_cell(cell, width):
+            padding_total = max(width - len(cell), 0)
+            padding_left = padding_total // 2
+            padding_right = padding_total - padding_left
+            return ' ' * padding_left + cell + ' ' * padding_right
+
+        rebuilt_table = ['| ' + ' | '.join(center_cell(cell, width) for cell, width in zip(row, col_widths)) + ' |' for row in matrix]
+        header_cols = lines[0].split('|')[1:-1]
+        valid_indices = [i for i, col in enumerate(matrix_transposed) if any(cell for cell in col)]
+        rebuilt_header = '| ' + ' | '.join(center_cell(header_cols[i].strip(), col_widths[i]) for i in valid_indices) + ' |'
+        rebuilt_separator = '|-' + '-|-'.join('-' * width for width in col_widths) + '-|'
+        clean_table = '\n'.join([rebuilt_header, rebuilt_separator] + rebuilt_table)
+
+    
+        ta.replace(clean_table, ta.selection.start, ta.selection.end)
+
+
+
+            
+
     def action_new(self):
         self.push_screen(InputPopup(self.new_file, title="New File", validators=[Length(minimum=1)]))
 
@@ -361,9 +484,31 @@ class Noteri(App):
     def action_new_directory(self):
         self.push_screen(InputPopup(self.new_directory, title="New Directory", validators=[Length(minimum=1)]))
 
+    def action_copy(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        self.clipboard = ta.selected_text
+        pyperclip.copy(self.clipboard)
+        self.notify(f"Copied {self.clipboard}", title="Copied")
+
+    def action_cut(self):
+        self.action_copy()
+        ta = self.query_one("TextArea", expect_type=TextArea).delete(ta.selection.start, ta.selection.end)
+        
+    def action_paste(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        ta.replace(pyperclip.paste(), ta.selection.start, ta.selection.end)
+
+    def action_table(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        if ta.selected_text != "":
+            self.cleanup_table()
+            return
+        self.push_screen(MarkdownTablePopup(self.create_table, validators=[Length(minimum=1)]))
+
+    
     @on(FileSystemCallback)
     def callback_message(self, message:FileSystemCallback):
-        message.callback(message.input)
+        message.callback(*message.input)
         
 
 def main():
