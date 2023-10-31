@@ -170,6 +170,27 @@ class FileCommands(Provider):
                 partial(app.action_table),
             )
 
+        # Bullet List
+        bullet_list_command = f"Bullet List"
+        score = matcher.match(bullet_list_command)
+        if score > 0:
+            yield Hit(
+                score,
+                matcher.highlight(bullet_list_command),  
+                partial(app.action_bullet_list),
+            )
+        
+        # Numbered List
+        numbered_list_command = f"Numbered List"
+        score = matcher.match(numbered_list_command)
+        if score > 0:
+            yield Hit(
+                score,
+                matcher.highlight(numbered_list_command),  
+                partial(app.action_numbered_list),
+            )
+        
+
 class MarkdownTablePopup(ModalScreen):
     BINDINGS = [ ("escape", "pop_screen") ]
 
@@ -377,9 +398,9 @@ class Noteri(App):
             ta.language = None
 
         if path.suffix == ".md":
-            self.query_one("#md", expect_type=Markdown).display = True
+            self.query_one("Markdown", expect_type=Markdown).display = True
         else:
-            self.query_one("#md", expect_type=Markdown).display = False
+            self.query_one("Markdown", expect_type=Markdown).display = False
 
         self.configure_widths()
 
@@ -547,6 +568,20 @@ class Noteri(App):
             self.cleanup_table()
             return
         self.push_screen(MarkdownTablePopup(self.create_table, validators=[Length(minimum=1)]))
+
+    def action_bullet_list(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        #in area selected add bullet to each line
+        lines = ta.selected_text.split('\n')
+        lines = [f"- {line}" for line in lines]
+        ta.replace('\n'.join(lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+    
+    def action_numbered_list(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        #in area selected add bullet to each line
+        lines = ta.selected_text.split('\n')
+        lines = [f"{i+1}. {line}" for i, line in enumerate(lines)]
+        ta.replace('\n'.join(lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
 
     @on(FileSystemCallback)
     def callback_message(self, message:FileSystemCallback):
