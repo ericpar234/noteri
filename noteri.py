@@ -1,10 +1,11 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button
-from textual.containers import Horizontal, ScrollableContainer
+from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button, Footer
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.validation import Length
 from textual.events import Event
 from textual import on
+from textual import work
 from textual.binding import Binding
 
 import pyperclip 
@@ -25,7 +26,7 @@ SCM_PATH = "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/"
 class WidgetCommands(Provider):
 
     async def startup(self) -> None:  
-        self.widgets = ["DirectoryTree", "#md", "Markdown", "TextArea"]
+        self.widgets = ["DirectoryTree", "#md", "Markdown", "TextArea", "#footer"]
 
     async def search(self, query: str) -> Hits:  
         matcher = self.matcher(query)  
@@ -71,124 +72,40 @@ class FileCommands(Provider):
                     #help="Open this file in the viewer",
                 )
 
-        # New File
-        new_file_command = f"New File"
-        score = matcher.match(new_file_command)
-        if score > 0:
-            #get last section of string split on space
-            yield Hit(
-                score,
-                matcher.highlight(new_file_command),  
-                partial(self.app.action_new)
-            )
+        # Define a map of commands and their respective actions
+        commands = {
+            "New File": partial(app.action_new),
+            "Save As": partial(app.push_screen, InputPopup(app.save_file, title="Save As", validators=[Length(minimum=1)])),
+            "Save": partial(app.save_file),
+            "Rename": partial(app.action_rename),
+            "Delete": partial(app.action_delete),
+            "New Directory": partial(app.action_new_directory),
+            "Cut": partial(app.action_cut),
+            "Copy": partial(app.action_copy),
+            "Paste": partial(app.action_paste),
+            "Table": partial(app.action_table),
+            "Bullet List": partial(app.action_bullet_list),
+            "Numbered List": partial(app.action_numbered_list),
+            "Code Block": partial(app.action_code_block),
+            "Bold": partial(app.action_bold),
+            "Italic": partial(app.action_italic),
+            "Horizontal Rule": partial(app.action_horizontal_rule),
+            "Heading 1": partial(app.action_heading, 1),
+            "Heading 2": partial(app.action_heading, 2),
+            "Heading 3": partial(app.action_heading, 3),
+            "Heading 4": partial(app.action_heading, 4),
+            "Heading 5": partial(app.action_heading, 5),
+        }
 
-        # Save As
-        save_as_command = f"Save As"
-        score = matcher.match(save_as_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(save_as_command),  
-                partial(app.push_screen, InputPopup(app.save_file, title="Save As", validators=[Length(minimum=1)])),
-            )
-
-        # Save File
-        save_file_command = f"Save"
-        score = matcher.match(save_file_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(save_file_command),  
-                partial(app.save_file),
-            )
-
-        # Rename
-        rename_command = f"Rename"
-        score = matcher.match(rename_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(rename_command),  
-                partial(app.action_rename),
-            )
-        
-        # Delete
-        delete_command = f"Delete"
-        score = matcher.match(delete_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(delete_command),  
-                partial(app.action_delete),
-            )
-
-        # New Directory
-        new_directory_command = f"New Directory"
-        score = matcher.match(new_directory_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(new_directory_command),  
-                partial(app.action_new_directory),
-            )
-
-        # Cut
-        cut_command = f"Cut"
-        score = matcher.match(cut_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(cut_command),  
-                partial(app.action_cut),
-            )
-        # Copy
-        copy_command = f"Copy"
-        score = matcher.match(copy_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(copy_command),  
-                partial(app.action_copy),
-            )
-        # Paste
-        paste_command = f"Paste"
-        score = matcher.match(paste_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(paste_command),  
-                partial(app.action_paste),
-            )
-
-        # Table
-        table_command = f"Table"
-        score = matcher.match(table_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(table_command),  
-                partial(app.action_table),
-            )
-
-        # Bullet List
-        bullet_list_command = f"Bullet List"
-        score = matcher.match(bullet_list_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(bullet_list_command),  
-                partial(app.action_bullet_list),
-            )
-        
-        # Numbered List
-        numbered_list_command = f"Numbered List"
-        score = matcher.match(numbered_list_command)
-        if score > 0:
-            yield Hit(
-                score,
-                matcher.highlight(numbered_list_command),  
-                partial(app.action_numbered_list),
-            )
+        # Loop through the commands map
+        for command, action in commands.items():
+            score = matcher.match(command)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(command),
+                    action
+                )
         
 
 class MarkdownTablePopup(ModalScreen):
@@ -313,24 +230,57 @@ class Noteri(App):
         #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in ta.BINDINGS, and remove it
         ta.BINDINGS = [b for b in ta.BINDINGS if b.key != "ctrl+x"]
 
-        with Horizontal():
-            yield DirectoryTree(self.directory)
-            yield ta
-            with ScrollableContainer(id="md"):
-                yield Markdown()
-            self.notify(f"IS DIR {self.directory}")
+        with Vertical():
+            with Horizontal():
+                yield DirectoryTree(self.directory)
+                yield ta
+                with ScrollableContainer(id="md"):
+                    yield Markdown()
+        yield Label(id="footer")
 
     def on_mount(self):
         self.query_one("TextArea", expect_type=TextArea).focus()
         self.query_one("Markdown", expect_type=Markdown).display = False
         self.open_file(self.filename)
         self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        self.print_footer()
         pass
+
+    @work(thread=True, exclusive=True)
+    def print_footer(self):
+        unsaved_char = ""
+        if self.unsaved_changes:
+            unsaved_char = "*"
+
+        filename = self.filename
+        if self.filename is None:
+            filename = "New File"
+        
+        language = self.query_one("TextArea", expect_type=TextArea).language
+            
+        if language is None:
+            language = "Plain Text"
+
+        selected_text = self.query_one("TextArea", expect_type=TextArea).selected_text
+        #calculate selection width
+        cursor_width = ""
+        if len(selected_text) > 0:
+            cursor_width = f" : {len(selected_text)}"
+
+        cursor_location = self.query_one("TextArea", expect_type=TextArea).cursor_location
+        self.query_one("#footer", expect_type=Label).update( 
+        f"{unsaved_char}{filename} | {language} | {str(cursor_location)}{cursor_width}"
+        )
+
+    @on(TextArea.SelectionChanged)
+    def cursor_moved(self, event:TextArea.SelectionChanged) -> None:
+        self.print_footer()
 
     @on(TextArea.Changed)
     def text_area_changed(self, event:TextArea.Changed) -> None:
         self.unsaved_changes = True
         self.query_one("Markdown", expect_type=Markdown).update(event.text_area.text)
+        self.print_footer()
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event:DirectoryTree.FileSelected):
@@ -397,8 +347,11 @@ class Noteri(App):
         else:
             ta.language = None
 
+        md = self.query_one("Markdown", expect_type=Markdown)
+
         if path.suffix == ".md":
             self.query_one("Markdown", expect_type=Markdown).display = True
+            md.update(text)
         else:
             self.query_one("Markdown", expect_type=Markdown).display = False
 
@@ -406,7 +359,6 @@ class Noteri(App):
 
         self.unsaved_changes = False
         
-
     def toggle_widget_display(self, id):
         widget = self.query_one(id)
 
@@ -442,7 +394,7 @@ class Noteri(App):
         with open(file_name, "w") as f:
             f.write("")
         self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
-        self.open_file(file_name)
+        self.open_file(Path(file_name))
         self.notify(f"Created {file_name}", title="Created")
     
     def save_file(self, new_filename=None):
@@ -458,6 +410,7 @@ class Noteri(App):
         self.filename = filename
         self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
         self.unsaved_changes = False
+        self.print_footer()
 
     def delete_file(self, filename):
         os.remove(filename)
@@ -552,7 +505,7 @@ class Noteri(App):
         ta = self.query_one("TextArea", expect_type=TextArea)
         self.clipboard = ta.selected_text
         pyperclip.copy(self.clipboard)
-        self.notify(f"Copied {self.clipboard}", title="Copied")
+        self.notify(f"{self.clipboard}", title="Copied")
 
     def action_cut(self):
         self.action_copy()
@@ -571,17 +524,58 @@ class Noteri(App):
 
     def action_bullet_list(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
-        #in area selected add bullet to each line
+        # in area selected, add a bullet to each line if it doesn't already exist
         lines = ta.selected_text.split('\n')
-        lines = [f"- {line}" for line in lines]
-        ta.replace('\n'.join(lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        refactored_lines = []
+        for line in lines:
+            # Check if the line already starts with a bullet
+            if not line.startswith('- '):
+                line = f"- {line}"
+            refactored_lines.append(line)
+        
+        ta.replace('\n'.join(refactored_lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+
     
     def action_numbered_list(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
-        #in area selected add bullet to each line
+        # In area selected, add "1. " to each line if not already numbered and not whitespace
         lines = ta.selected_text.split('\n')
-        lines = [f"{i+1}. {line}" for i, line in enumerate(lines)]
-        ta.replace('\n'.join(lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        refactored_lines = []
+        for line in lines:
+            # Check if the line is not just whitespace and doesn't already start with a number followed by a dot and a space
+            if line.strip() and not line.lstrip().startswith(tuple(f"{i}." for i in range(1, 10))):
+                line = f"1. {line}"
+            refactored_lines.append(line)
+
+        ta.replace('\n'.join(refactored_lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+
+    def action_code_block(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+
+        # If there is a selection, wrap it in a code block
+        if ta.selected_text != "":
+            ta.replace(f"```\n{ta.selected_text}\n```", ta.selection.start, ta.selection.end)
+            return
+        
+    def action_create_link(self, link, message):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        ta.replace(f"[{message}]({link})", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+
+    def action_bold(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        ta.replace(f"**{ta.selected_text}**", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+
+    def action_italic(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        ta.replace(f"*{ta.selected_text}*", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+
+    def action_horizontal_rule(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        ta.replace(f"---", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+    
+    def action_heading(self, level):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        ta.replace(f"{'#' * level} {ta.selected_text}", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
 
     @on(FileSystemCallback)
     def callback_message(self, message:FileSystemCallback):

@@ -3,8 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name='noteri',
     version='0.1.0',
-    author='Your Name',
-    author_email='ericpar234@gmail.com',
+    author='ericpar',
     description='A short description of your project',
     long_description=open('README.md').read(),
     install_requires=[
