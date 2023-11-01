@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button, Footer
+from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button, Footer, MarkdownViewer
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.validation import Length
@@ -26,7 +26,7 @@ SCM_PATH = "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/"
 class WidgetCommands(Provider):
 
     async def startup(self) -> None:  
-        self.widgets = ["DirectoryTree", "#md", "Markdown", "TextArea", "#footer"]
+        self.widgets = ["DirectoryTree", "#markdown", "TextArea", "#footer"]
 
     async def search(self, query: str) -> Hits:  
         matcher = self.matcher(query)  
@@ -79,6 +79,7 @@ class FileCommands(Provider):
             "Save": partial(app.save_file),
             "Rename": partial(app.action_rename),
             "Delete": partial(app.action_delete),
+            "Find": partial(app.action_find),
             "New Directory": partial(app.action_new_directory),
             "Cut": partial(app.action_cut),
             "Copy": partial(app.action_copy),
@@ -95,6 +96,7 @@ class FileCommands(Provider):
             "Heading 3": partial(app.action_heading, 3),
             "Heading 4": partial(app.action_heading, 4),
             "Heading 5": partial(app.action_heading, 5),
+            "Heading 6": partial(app.action_heading, 6),
         }
 
         # Loop through the commands map
@@ -191,6 +193,8 @@ class Noteri(App):
     clipboard = ""
     unsaved_changes = False
     action_stack = []
+    selected_directory = directory
+    backlinks = []
 
     BINDINGS = [
         Binding("ctrl+n", "new", "New File"),
@@ -198,7 +202,7 @@ class Noteri(App):
         Binding("shift+ctrl+s", "save_as", "Save As"),
         Binding("ctrl+r", "rename", "Rename File"),
         Binding("ctrl+d", "delete", "Delete File"),
-        # Binding("ctrl+shift+x", "cut", "Cut Text", priority=True),
+        Binding("ctrl+shift+x", "cut", "Cut Text", priority=True),
         # Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
         # Binding("ctrl+shift+v", "paste", "Paste Text", priority=True),
     ]
@@ -220,6 +224,7 @@ class Noteri(App):
 
         elif path.is_dir():
             self.directory = path
+            self.selected_directory = path
         
 
     def compose(self) -> ComposeResult:
@@ -234,19 +239,23 @@ class Noteri(App):
             with Horizontal():
                 yield DirectoryTree(self.directory)
                 yield ta
-                with ScrollableContainer(id="md"):
-                    yield Markdown()
+                with Vertical(id="md"):
+                    yield Label("", id="title")
+                    with ScrollableContainer():
+                        yield Markdown(id="markdown")
+                        yield Markdown(id="backlinks")
+
         yield Label(id="footer")
 
     def on_mount(self):
         self.query_one("TextArea", expect_type=TextArea).focus()
-        self.query_one("Markdown", expect_type=Markdown).display = False
+        self.query_one("#markdown", expect_type=Markdown).display = False
         self.open_file(self.filename)
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
         self.print_footer()
         pass
 
-    @work(thread=True, exclusive=True)
+    @work(thread=True, exclusive=False)
     def print_footer(self):
         unsaved_char = ""
         if self.unsaved_changes:
@@ -279,7 +288,7 @@ class Noteri(App):
     @on(TextArea.Changed)
     def text_area_changed(self, event:TextArea.Changed) -> None:
         self.unsaved_changes = True
-        self.query_one("Markdown", expect_type=Markdown).update(event.text_area.text)
+        self.query_one("#markdown", expect_type=Markdown).update(event.text_area.text)
         self.print_footer()
 
     @on(DirectoryTree.FileSelected)
@@ -287,17 +296,57 @@ class Noteri(App):
         self.open_file(event.path)
         self.unsaved_changes = False
 
+    @on(DirectoryTree.DirectorySelected)
+    def directory_selected(self, event:DirectoryTree.DirectorySelected):
+        self.selected_directory = (event.path)
+
     @on(Markdown.LinkClicked)
     def linked_clicked(self, message:Markdown.LinkClicked ):
         self.toggle_class("DirectoryTree")
         #read first character of path
         if message.href[0] == "#":
-            self.query_one("Markdown", expect_type=Markdown).goto_anchor(message.href[1:])
+            self.query_one("#markdown", expect_type=Markdown).goto_anchor(message.href[1:])
             return
         
         #get subdirectory of filepath
-        path = Path(self.filename).parent / message.href
+        #path = Path(self.filename).parent / message.href
+        if message.markdown.id == "backlinks":
+            path = Path(message.href)
+        else:
+            path = Path(self.filename).parent / message.href
+
         self.open_file(path)
+
+    def _update_backlinks_helper(self, path:Path):
+        glob = list(Path(path).glob("./*"))
+
+        for item in glob:
+            if item.name[0] == ".":
+                continue
+
+            if item.is_dir():
+                self._update_backlinks_helper(item)
+            elif item.name.endswith(".md"):
+                with open(item, "r") as f:
+                    text = f.read()
+                    if text.find( self.filename.name + ")") != -1:
+                        self.backlinks.append(item)
+
+    def update_backlinks(self):
+        self.backlinks.clear()
+        bl = self.query_one("#backlinks", expect_type=Markdown)
+        self._update_backlinks_helper(self.directory)
+
+        backlink_text = ""
+        for item in self.backlinks:
+            backlink_text += f"- [{item.name}]({str(item)})\n"
+        
+        if backlink_text != "":
+            backlink_text = "###\n### Backlinks\n" + backlink_text
+            bl.update(backlink_text)
+            bl.display = True
+        else:
+            bl.display = False
 
     def open_file(self, path: Path) -> None:
 
@@ -318,9 +367,10 @@ class Noteri(App):
         try:
             with open(path) as f:
                 text = f.read()
-                #ta.clear()
                 ta.load_text(text)
                 self.filename = path
+                self.selected_directory = path.parent
+
         except FileNotFoundError as e:
             self.notify(f"File not found: {path}", severity="error", title="FileNotFoundError")
             return
@@ -343,17 +393,29 @@ class Noteri(App):
         }
 
         if path.suffix in file_extensions:
-            ta.language = file_extensions[path.suffix]
+            try:
+                ta.language = file_extensions[path.suffix]
+            except NameError:
+                self.notify(f"Issue loading {file_extensions[path.suffix]} language.", title="Language Error", severity="error")
+                ta.language = None
         else:
             ta.language = None
 
-        md = self.query_one("Markdown", expect_type=Markdown)
+        md = self.query_one("#markdown", expect_type=Markdown)
+        title = self.query_one("#title", expect_type=Label)
 
         if path.suffix == ".md":
-            self.query_one("Markdown", expect_type=Markdown).display = True
+            md.display = True
+            title.display = True
             md.update(text)
+            title.update(self.filename.parts[-1])
+            self.update_backlinks()
+
         else:
-            self.query_one("Markdown", expect_type=Markdown).display = False
+            title.display = False
+            md.display = False
+
+        
 
         self.configure_widths()
 
@@ -371,29 +433,37 @@ class Noteri(App):
         self.configure_widths()
 
     def configure_widths(self):
-        ids = ["#md", "TextArea"]
 
         # if both enabled set width to 50%
         # if one enabled set to 100% and 0%
         # if both disabled set to 0%
-        
-        if self.query_one("#md").display and self.query_one("TextArea").display:
-            self.query_one("#md").styles.width = "50%"
-            self.query_one("TextArea").styles.width = "50%"
-        elif self.query_one("#md").display:
-            self.query_one("#md").styles.width = "100%"
-            self.query_one("TextArea").styles.width = "0"
-        elif self.query_one("TextArea").display:
-            self.query_one("#md").styles.width = "0"
-            self.query_one("TextArea").styles.width = "100%"
+
+        markdown = self.query_one("#markdown")
+        md = self.query_one("#md")
+        title = self.query_one("#title")
+        ta = self.query_one("TextArea")
+
+        if markdown.display and ta.display:
+            markdown.styles.width = "50%"
+            ta.styles.width = "50%"
+        elif markdown.display:
+            markdown.styles.width = "100%"
+            ta.styles.width = "0"
+        elif ta.display:
+            markdown.styles.width = "0"
+            ta.styles.width = "100%"
         else:
-            self.query_one("#md").styles.width = "0"
-            self.query_one("TextArea").styles.width = "0"
+            markdown.styles.width = "0"
+            ta.styles.width = "0"
+        
+        title.width = markdown.styles.width
+
+        md.display = markdown.display        
 
     def new_file(self, file_name):
         with open(file_name, "w") as f:
             f.write("")
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
         self.open_file(Path(file_name))
         self.notify(f"Created {file_name}", title="Created")
     
@@ -408,13 +478,13 @@ class Noteri(App):
             f.write(self.query_one("TextArea", expect_type=TextArea).text)
         self.notify(f"Saved {filename}", title="Saved")
         self.filename = filename
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
         self.unsaved_changes = False
         self.print_footer()
 
     def delete_file(self, filename):
         os.remove(filename)
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
         self.notify(f"Deleted {filename}", title="Deleted")
 
     def new_directory(self, directory_name):
@@ -438,7 +508,6 @@ class Noteri(App):
             ta.insert(f"|{'|'.join(['---'] * columns)}|\n")
         for i in range(rows):
             ta.insert(f"|   {'|   '.join([''] * columns)}|\n")
-
 
     def cleanup_table(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -484,7 +553,11 @@ class Noteri(App):
 
 
     def action_new(self):
-        self.push_screen(InputPopup(self.new_file, title="New File", validators=[Length(minimum=1)]))
+        self.push_screen(InputPopup(self.new_file, title="New File", validators=[Length(minimum=1)], default = str(self.selected_directory) + "/"))
+
+    def action_new_directory(self):
+        self.push_screen(InputPopup(self.new_directory, title="New Directory", validators=[Length(minimum=1)], default = str(self.selected_directory) + "/"))
+
 
     def action_save(self):
         self.save_file()
@@ -498,9 +571,6 @@ class Noteri(App):
     def action_delete(self):
         self.delete_file(self.filename)
     
-    def action_new_directory(self):
-        self.push_screen(InputPopup(self.new_directory, title="New Directory", validators=[Length(minimum=1)]))
-
     def action_copy(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
         self.clipboard = ta.selected_text
@@ -509,7 +579,8 @@ class Noteri(App):
 
     def action_cut(self):
         self.action_copy()
-        ta = self.query_one("TextArea", expect_type=TextArea).delete(ta.selection.start, ta.selection.end)
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        ta.delete(ta.selection.start, ta.selection.end)
         
     def action_paste(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -576,6 +647,9 @@ class Noteri(App):
     def action_heading(self, level):
         ta = self.query_one("TextArea", expect_type=TextArea)
         ta.replace(f"{'#' * level} {ta.selected_text}", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+
+    def action_find(self):
+        pass
 
     @on(FileSystemCallback)
     def callback_message(self, message:FileSystemCallback):

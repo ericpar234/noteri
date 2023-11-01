@@ -6,12 +6,14 @@ DirectoryTree {
 
 #md {
     width: 50%;
-#    dock: right;
+}
+
+ScrollableContainer {
     scrollbar-gutter: stable;
     scrollbar-size: 1 1;
 }
 
-Markdown {
+#markdown {
     width: 100%;
     height: 1fr;
     height: auto;
@@ -19,4 +21,13 @@ Markdown {
 TextArea {
     width: 100%;
     scrollbar-size: 1 1;
+    scrollbar-size-horizontal: 1;
+}
+
+#title {
+    align: center middle;
+}
+
+#footer {
+    dock: bottom;
 }
