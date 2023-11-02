@@ -1,5 +1,6 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button, Footer, MarkdownViewer
+from textual.widgets.text_area import LanguageDoesNotExist
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.validation import Length
@@ -45,38 +46,66 @@ class WidgetCommands(Provider):
                 )  
 
 class FileCommands(Provider):
+
+    def _read_files_helper(self, path, depth = 0):
+        file_list = []    
+        if depth == 5:
+            return []
+        
+        l = list(Path(path).glob("*"))
+
+        for p in l:
+            if p.name[0] == "." or p.name[0] == "venv":
+                continue
+            if p.is_dir():
+                for item in self._read_files_helper(p, depth=depth+1):
+                    file_list.append(item)
+            elif p.is_file():
+                file_list.append(p)
+        return file_list
+
+
     def read_files(self) -> list[Path]:
-        return list(Path(self.app.directory).glob("*.*"))
+        return self._read_files_helper(Path(self.app.directory))
+        #return list(Path(self.app.directory).glob("*.*"))
 
     async def startup(self) -> None:  
         """Called once when the command palette is opened, prior to searching."""
         worker = self.app.run_worker(self.read_files, thread=True)
-        self.python_paths = await worker.wait()
+        self.file_paths = await worker.wait()
 
     async def search(self, query: str) -> Hits:  
-        """Search for Python files."""
+        """Search for files."""
         matcher = self.matcher(query)
         app = self.app
         assert isinstance(app, Noteri)
 
-        for path in self.python_paths:
-            command = f"Open {str(path)}"
-            score = matcher.match(command)
+        commands = {
+            "Open": app.open_file,
+            "Link File": app.create_link, 
+        }
 
-            # Open File
-            if score > 0:
-                yield Hit(
-                    score,
-                    matcher.highlight(command),  
-                    partial(app.open_file, path),
-                    #help="Open this file in the viewer",
-                )
+        # Open File
+        for command, action in commands.items():
+            for path in self.file_paths:
+                full_command = f"{command} {str(path)}"
+                score = matcher.match(full_command)
+
+                # Open File
+                if score > 0:
+                    yield Hit(
+                        score,
+                        matcher.highlight(full_command),  
+                        partial(action, path),
+                        #help="Open this file in the viewer",
+                    )
+                
 
         # Define a map of commands and their respective actions
         commands = {
             "New File": partial(app.action_new),
-            "Save As": partial(app.push_screen, InputPopup(app.save_file, title="Save As", validators=[Length(minimum=1)])),
-            "Save": partial(app.save_file),
+            "Save As": partial(app.action_save_as),
+            "Save": partial(app.action_save),
             "Rename": partial(app.action_rename),
             "Delete": partial(app.action_delete),
             "Find": partial(app.action_find),
@@ -157,7 +186,7 @@ class InputPopup(ModalScreen):
         self.app.pop_screen()
 
 class YesNoPopup(ModalScreen):
-
+    
     BINDINGS = [ ("escape", "pop_screen") ]
 
     def __init__(self, title, callback, message="") -> None:
@@ -182,8 +211,31 @@ class YesNoPopup(ModalScreen):
         self.app.post_message(Noteri.FileSystemCallback(self.callback, (False,)))
         self.app.pop_screen()
     
-        
+class FileSelectionPopup(ModalScreen):
+    BINDINGS = [ ("escape", "pop_screen") ]
 
+    def __init__(self, title, callback, message="") -> None:
+        super().__init__()
+        self.callback = callback
+        self.title = title
+        self.message = message
+
+        self.selected_file = None
+
+    def compose(self) -> ComposeResult:
+        yield DirectoryTree()
+        yield Label()
+        yield Button("Create Link", "#create")
+
+    @on (DirectoryTree.FileSelected)
+    def file_selected(self, message:DirectoryTree.FileSelected):
+        self.selected_file = Path(message.path)
+
+    @on(Button.Pressed, "#Create")
+    def yes(self, event:Button.Pressed):
+        self.app.post_message(Noteri.FileSystemCallback(self.callback, self.selected_file))
+        self.app.pop_screen()
+    
 class Noteri(App):
     CSS_PATH = "noteri.tcss"
     COMMANDS = App.COMMANDS | {FileCommands} | {WidgetCommands}
@@ -255,8 +307,9 @@ class Noteri(App):
         self.print_footer()
         pass
 
-    @work(thread=True, exclusive=False)
+    @work(thread=True, exclusive=True)
     def print_footer(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
         unsaved_char = ""
         if self.unsaved_changes:
             unsaved_char = "*"
@@ -265,20 +318,20 @@ class Noteri(App):
         if self.filename is None:
             filename = "New File"
         
-        language = self.query_one("TextArea", expect_type=TextArea).language
+        language = ta.language
             
         if language is None:
             language = "Plain Text"
 
-        selected_text = self.query_one("TextArea", expect_type=TextArea).selected_text
+        selected_text = ta.selected_text
         #calculate selection width
         cursor_width = ""
         if len(selected_text) > 0:
             cursor_width = f" : {len(selected_text)}"
 
-        cursor_location = self.query_one("TextArea", expect_type=TextArea).cursor_location
+        cursor_location = ta.cursor_location
         self.query_one("#footer", expect_type=Label).update( 
-        f"{unsaved_char}{filename} | {language} | {str(cursor_location)}{cursor_width}"
+        f"{self.selected_directory} {unsaved_char}{filename} | {language} | {str(cursor_location)}{cursor_width}"
         )
 
     @on(TextArea.SelectionChanged)
@@ -338,15 +391,21 @@ class Noteri(App):
         self._update_backlinks_helper(self.directory)
 
         backlink_text = ""
+
+        #TODO: Sort
+
         for item in self.backlinks:
             backlink_text += f"- [{item.name}]({str(item)})\n"
-        
+
         if backlink_text != "":
-            backlink_text = "###\n### Backlinks\n" + backlink_text
-            bl.update(backlink_text)
             bl.display = True
+            bl.styles.height = "auto"
         else:
             bl.display = False
+            bl.styles.height = "0"
+
+        backlink_text = "###\n### Backlinks\n" + backlink_text
+        bl.update(backlink_text)
 
     def open_file(self, path: Path) -> None:
 
@@ -395,6 +454,9 @@ class Noteri(App):
         if path.suffix in file_extensions:
             try:
                 ta.language = file_extensions[path.suffix]
+            except LanguageDoesNotExist:
+                self.notify(f"Issue loading {file_extensions[path.suffix]} language.", title="Language Error", severity="error")
+                ta.language = None
             except NameError:
                 self.notify(f"Issue loading {file_extensions[path.suffix]} language.", title="Language Error", severity="error")
                 ta.language = None
@@ -403,17 +465,20 @@ class Noteri(App):
 
         md = self.query_one("#markdown", expect_type=Markdown)
         title = self.query_one("#title", expect_type=Label)
+        backlinks = self.query_one("#backlinks", expect_type=Markdown)
 
         if path.suffix == ".md":
             md.display = True
             title.display = True
+            backlinks.display = True
             md.update(text)
-            title.update(self.filename.parts[-1])
+            title.update(str(self.filename.parts[-1])[:-3])
             self.update_backlinks()
 
         else:
             title.display = False
             md.display = False
+            backlinks.display = False
 
         
 
@@ -426,7 +491,6 @@ class Noteri(App):
 
         if widget.display:
             widget.display = False
-            return
         else:
             widget.display = True
 
@@ -441,24 +505,28 @@ class Noteri(App):
         markdown = self.query_one("#markdown")
         md = self.query_one("#md")
         title = self.query_one("#title")
+        backlinks = self.query_one("#backlinks")
+
         ta = self.query_one("TextArea")
 
         if markdown.display and ta.display:
-            markdown.styles.width = "50%"
+            md.styles.width = "50%"
             ta.styles.width = "50%"
         elif markdown.display:
-            markdown.styles.width = "100%"
+            md.styles.width = "100%"
             ta.styles.width = "0"
         elif ta.display:
-            markdown.styles.width = "0"
+            md.styles.width = "0"
             ta.styles.width = "100%"
         else:
-            markdown.styles.width = "0"
+            md.styles.width = "0"
             ta.styles.width = "0"
-        
-        title.width = markdown.styles.width
 
-        md.display = markdown.display        
+        # TODO: Cooler way of doing this
+        md.display = markdown.display
+        title.display = markdown.display
+        backlinks.display = markdown.display
+
 
     def new_file(self, file_name):
         with open(file_name, "w") as f:
@@ -628,9 +696,8 @@ class Noteri(App):
             ta.replace(f"```\n{ta.selected_text}\n```", ta.selection.start, ta.selection.end)
             return
         
-    def action_create_link(self, link, message):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        ta.replace(f"[{message}]({link})", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+    def action_create_link(self):
+        self.create_link()
 
     def action_bold(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -650,6 +717,39 @@ class Noteri(App):
 
     def action_find(self):
         pass
+
+    def create_link(self, link:str=None, message=None, relative=True):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+
+        if link == None:
+            #TODO: Fuzzy match existing files
+            if ta.selected_text.startswith('htt') or ta.selected_text.startswith("#"):
+                link = ta.selected_text
+            elif  ta.selected_text.endswith(".md"):
+                link = ta.selected_text
+            else:
+                link = ""
+
+        if str(link).endswith(".md") and relative:
+            link_path = Path(link)
+            
+            try:
+                self.notify(f"{self.selected_directory}\n{link_path}")
+                link = link_path.relative_to(self.selected_directory)
+            except ValueError as e:
+                self.notify(f"Could not find relative path for {link_path}, using abs")
+                link = ta.selected_text
+
+        if message == None and str(link).endswith(".md"):
+            message = str(Path(link).name)[:-3]
+
+        if message == None:
+            if ta.selected_text == "":
+                message = ""
+            else:
+                message = ta.selected_text
+
+        ta.replace(f"[{message}]({link})", ta.selection.start, ta.selection.end, maintain_selection_offset=False)        
 
     @on(FileSystemCallback)
     def callback_message(self, message:FileSystemCallback):

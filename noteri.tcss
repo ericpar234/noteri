@@ -15,9 +15,9 @@ ScrollableContainer {
 
 #markdown {
     width: 100%;
-    height: 1fr;
     height: auto;
 }
+
 TextArea {
     width: 100%;
     scrollbar-size: 1 1;
