@@ -243,15 +243,6 @@ class FileSelectionPopup(ModalScreen):
 class Noteri(App):
     CSS_PATH = "noteri.tcss"
     COMMANDS = App.COMMANDS | {FileCommands} | {WidgetCommands}
-    directory = "./"
-    filename = None
-    languages = []
-    clipboard = ""
-    unsaved_changes = False
-    action_stack = []
-    selected_directory = directory
-    backlinks = []
-
     BINDINGS = [
         Binding("ctrl+n", "new", "New File"),
         Binding("ctrl+s", "save", "Save File"),
@@ -259,6 +250,27 @@ class Noteri(App):
         Binding("ctrl+r", "rename", "Rename File"),
         Binding("ctrl+d", "delete", "Delete File"),
         Binding("ctrl+shift+x", "cut", "Cut Text", priority=True),
+        Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
+        Binding("ctrl+shift+v", "paste", "Paste Text", priority=True),
+        Binding("ctrl+f", "find", "Find Text"),
+        Binding("ctrl+t", "table", "Create Table"),
+        Binding("ctrl+shift+t", "bullet_list", "Create Bullet List"),
+        Binding("ctrl+shift+n", "numbered_list", "Create Numbered List"),
+        Binding("ctrl+shift+b", "block_quote", "Create Block Quote"),
+        Binding("ctrl+shift+k", "create_link", "Create Link"),
+        Binding("ctrl+shift+l", "copy_link", "Copy Link"),
+        Binding("ctrl+shift+h", "horizontal_rule", "Create Horizontal Rule"),
+        Binding("ctrl+b", "bold", "Bold Text"),
+        Binding("ctrl+i", "italic", "Italic Text"),
+        Binding("ctrl+1", "heading", "Heading 1"),
+        Binding("ctrl+2", "heading", "Heading 2"),
+        Binding("ctrl+3", "heading", "Heading 3"),
+        Binding("ctrl+4", "heading", "Heading 4"),
+        Binding("ctrl+5", "heading", "Heading 5"),
+        Binding("ctrl+6", "heading", "Heading 6"),
+        Binding("ctrl+y", "redo", "Redo"),
+        Binding("ctrl+z", "undo", "Undo"),
+
         # Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
         # Binding("ctrl+shift+v", "paste", "Paste Text", priority=True),
     ]
@@ -272,6 +284,20 @@ class Noteri(App):
 
     def __init__(self, path="./"):
         super().__init__()
+
+        self.directory = "./"
+        self.filename = None
+        self.languages = []
+        self.clipboard = ""
+        self.unsaved_changes = False
+        self.action_stack = []
+        self.selected_directory = self.directory
+        self.backlinks = []
+        self.history_index = 0
+        self.history = []
+        self.history_disabled = False
+        self.history_counter = 0
+
         path = Path(path)
         if path.is_file():
             self.filename = path
@@ -283,6 +309,7 @@ class Noteri(App):
             self.selected_directory = path
         
 
+
     def compose(self) -> ComposeResult:
         ta = TextArea()
         for scm_file in Path(SCM_PATH).glob("*.scm"):
@@ -290,6 +317,7 @@ class Noteri(App):
         
         #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in ta.BINDINGS, and remove it
         ta.BINDINGS = [b for b in ta.BINDINGS if b.key != "ctrl+x"]
+        ta.action_delete_line = self.action_cut
 
         with Vertical():
             with Horizontal():
@@ -344,9 +372,13 @@ class Noteri(App):
 
     @on(TextArea.Changed)
     def text_area_changed(self, event:TextArea.Changed) -> None:
+        self.history_counter += 1
         self.unsaved_changes = True
         self.query_one("#markdown", expect_type=Markdown).update(event.text_area.text)
         self.print_footer()
+
+        if self.history_counter > 5:
+            self.add_history()
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event:DirectoryTree.FileSelected):
@@ -541,8 +573,10 @@ class Noteri(App):
             md.display = False
             backlinks.display = False
 
+        self.history.clear()
+        self.history_index = 0
+        self.add_history()
         
-
         self.configure_widths()
 
         self.unsaved_changes = False
@@ -631,12 +665,19 @@ class Noteri(App):
         self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
     
     def create_table(self, rows, columns, header):
+        self.add_history()
         ta = self.query_one("TextArea", expect_type=TextArea)
+        self.history_counter
+        insert_text = ""
         if header:
-            ta.insert(f"|   {'|   '.join([''] * columns)}|\n")
-            ta.insert(f"|{'|'.join(['---'] * columns)}|\n")
+            insert_text += f"|   {'|   '.join([''] * columns)}|\n"
+            insert_text += f"|{'|'.join(['---'] * columns)}|\n"
+
         for i in range(rows):
-            ta.insert(f"|   {'|   '.join([''] * columns)}|\n")
+            row_text = f"|   {'|   '.join([''] * columns)}|\n"
+            insert_text += row_text
+
+        ta.replace(insert_text, ta.selection.start, ta.selection.end)
 
     def cleanup_table(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -796,6 +837,55 @@ class Noteri(App):
         #put link into clipboard
         text = f"[{self.filename.name}]({self.filename})"
         pyperclip.copy(ta.selected_text)
+
+    def add_history(self):
+        if self.history_disabled:
+            return
+
+        ta = self.query_one("TextArea", TextArea)
+        if self.history_index < len(self.history) - 1:
+            self.history[self.history_index] = { "text": ta.text, 
+                                                 "cursor_location": ta.cursor_location}
+            #remove forward history
+            self.history = self.history[:self.history_index + 1]
+            self.notify("Remove forward history")
+        else:
+            self.history.append({ "text": ta.text, 
+                                  "cursor_location": ta.cursor_location})
+        self.history_index += 1
+        self.history_counter = 0
+        self.notify(f"add history. {self.history_index} {len(self.history)}")
+
+        # make self.history only latest 10
+        if len(self.history) > 10:
+            self.history = self.history[-10:]
+            self.history_index = 9
+
+    def action_undo(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
+
+        if self.history_index > 0:
+            self.history_index -= 1
+            self.history_disabled = True
+            self.add_history()
+            ta.load_text(self.history[self.history_index]["text"])
+            ta.cursor_location = self.history[self.history_index]["cursor_location"]
+            self.history_counter = -1
+            self.notify(f"{self.history_index} {len(self.history)}")
+        
+        self.history_disabled = False
+
+    def action_redo(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+
+        if self.history_index < len(self.history) - 1:
+            self.history_index += 1
+            self.history_disabled = True
+            ta.load_text(self.history[self.history_index]["text"])
+            ta.cursor_location = self.history[self.history_index]["cursor_location"]
+            self.history_counter = -1
+        self.history_disabled = False
 
     def create_link(self, link:str=None, message=None, relative=True):
         ta = self.query_one("TextArea", expect_type=TextArea)
