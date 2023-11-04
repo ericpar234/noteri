@@ -117,6 +117,9 @@ class FileCommands(Provider):
             "Bullet List": partial(app.action_bullet_list),
             "Numbered List": partial(app.action_numbered_list),
             "Code Block": partial(app.action_code_block),
+            "Create Link": partial(app.action_create_link),
+            "Copy Link": partial(app.action_copy_link),
+            "Block Quote": partial(app.action_block_quote),
             "Bold": partial(app.action_bold),
             "Italic": partial(app.action_italic),
             "Horizontal Rule": partial(app.action_horizontal_rule),
@@ -126,6 +129,7 @@ class FileCommands(Provider):
             "Heading 4": partial(app.action_heading, 4),
             "Heading 5": partial(app.action_heading, 5),
             "Heading 6": partial(app.action_heading, 6),
+
         }
 
         # Loop through the commands map
@@ -360,7 +364,64 @@ class Noteri(App):
         if message.href[0] == "#":
             self.query_one("#markdown", expect_type=Markdown).goto_anchor(message.href[1:])
             return
+        if message.href.startswith("http"):
+            self.notify(f"Opening external link {message.href}")
+            os.system(f"open {message.href}")
+            return
         
+        file_suffixs = [
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".tiff",
+            ".gif",
+            ".bmp",
+            ".svg",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".zip",
+            ".tar",
+            ".gz",
+            ".tgz",
+            ".rar",
+            ".7z",
+            ".mp3",
+            ".mp4",
+            ".wav",
+            ".ogg",
+            ".flac",
+            ".avi",
+            ".mov",
+            ".wmv",
+            ".mkv",
+            ".webm",
+            ".m4a",
+            ".m4v",
+            ".flv",
+            ".mpeg",
+            ".mpg",
+            ".mpe",
+            ".mp2",
+            ".mpv",
+            ".m2v",
+            ".m4v",
+            ".3gp",
+            ".3g2",
+            ".mxf",
+            ".roq",
+        ]
+
+        for suffix in file_suffixs:
+            if message.href.endswith(suffix):
+                self.notify(f"Opening external file {self.filename.parent}/{message.href}")
+                os.system(f"open {self.filename.parent}/{message.href}")
+                return                
+
         #get subdirectory of filepath
         #path = Path(self.filename).parent / message.href
         if message.markdown.id == "backlinks":
@@ -550,10 +611,10 @@ class Noteri(App):
         self.unsaved_changes = False
         self.print_footer()
 
-    def delete_file(self, filename):
-        os.remove(filename)
+    def delete_file(self):
+        os.remove(self.filename)
         self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
-        self.notify(f"Deleted {filename}", title="Deleted")
+        self.notify(f"Deleted {self.filename}", title="Deleted")
 
     def new_directory(self, directory_name):
         os.mkdir(directory_name)
@@ -619,6 +680,9 @@ class Noteri(App):
         self.unsaved_changes = False
         self.action_stack.pop()()
 
+    def delete_file_callback(self, value):
+        if value:
+            self.delete_file()
 
     def action_new(self):
         self.push_screen(InputPopup(self.new_file, title="New File", validators=[Length(minimum=1)], default = str(self.selected_directory) + "/"))
@@ -637,7 +701,7 @@ class Noteri(App):
         self.push_screen(InputPopup(self.rename_file, title="Rename", validators=[Length(minimum=1)], default=str(self.filename)))
     
     def action_delete(self):
-        self.delete_file(self.filename)
+        self.push_screen(YesNoPopup(f"Delete {self.filename}", self.delete_file_callback))
     
     def action_copy(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -684,8 +748,17 @@ class Noteri(App):
             # Check if the line is not just whitespace and doesn't already start with a number followed by a dot and a space
             if line.strip() and not line.lstrip().startswith(tuple(f"{i}." for i in range(1, 10))):
                 line = f"1. {line}"
-            refactored_lines.append(line)
 
+        ta.replace('\n'.join(refactored_lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+
+    def action_block_quote(self):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        refactored_lines = []
+        # If there is a selection, wrap it in a code block
+        for line in ta.selected_text.split('\n'):
+            if not line.startswith('>'):
+                line = f"> {line}"
+            refactored_lines.append(line)
         ta.replace('\n'.join(refactored_lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
 
     def action_code_block(self):
@@ -695,7 +768,7 @@ class Noteri(App):
         if ta.selected_text != "":
             ta.replace(f"```\n{ta.selected_text}\n```", ta.selection.start, ta.selection.end)
             return
-        
+
     def action_create_link(self):
         self.create_link()
 
@@ -717,6 +790,12 @@ class Noteri(App):
 
     def action_find(self):
         pass
+
+    def action_copy_link(self):
+        
+        #put link into clipboard
+        text = f"[{self.filename.name}]({self.filename})"
+        pyperclip.copy(ta.selected_text)
 
     def create_link(self, link:str=None, message=None, relative=True):
         ta = self.query_one("TextArea", expect_type=TextArea)
