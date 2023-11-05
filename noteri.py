@@ -8,7 +8,7 @@ from textual.events import Event
 from textual import on
 from textual import work
 from textual.binding import Binding
-
+from textual import events
 import pyperclip 
 
 from functools import partial
@@ -240,6 +240,97 @@ class FileSelectionPopup(ModalScreen):
         self.app.post_message(Noteri.FileSystemCallback(self.callback, self.selected_file))
         self.app.pop_screen()
     
+class ExtendedTextArea(TextArea):
+    """A subclass of TextArea with parenthesis-closing functionality."""
+
+    def _insert_bookend_pair(self, bookend_start: str, bookend_end: str) -> None:
+        self.selected_text
+        if self.selected_text == "":
+            self.insert(bookend_start + bookend_end)
+            self.move_cursor_relative(columns=-1)
+        else:
+            selection = self.selection
+            text = bookend_start + self.selection + bookend_end
+            self.insert(text)
+            self.selection = (selection.start, selection.end + len(bookend_end + bookend_start))
+        
+    def _whitespace(self, spaces: int) -> None:
+        
+        if spaces < 0:
+            spaces = abs(spaces)
+            if self.selected_text == "":
+                start_location = self.get_cursor_line_start_location()
+                text = self.get_text_range(start_location, self.cursor_location)
+                # remove leading whitespace from text up to spaces number if whitepsace exists
+                if text.startswith(" " * spaces):
+                    text = text[spaces:]
+                    self.replace(text, start_location, self.cursor_location)
+                elif text.startswith("\t"):
+                    text = text[1:]
+                    self.replace(text, start_location, self.cursor_location)
+            else:
+                selection = self.selection
+                lines = self.selected_text.split("\n")
+                new_lines = []
+                for line in lines:
+                    if line.startswith(" " * spaces):
+                        new_lines.append(line[spaces:])
+                    else:
+                        new_lines.append(line)
+                text = "\n".join(new_lines)
+                self.insert(text)
+                self.selection = (selection.start, selection.end - spaces)
+            return
+
+        if self.selected_text == "":
+            self.insert(" " * spaces)
+        else:
+            selection = self.selection
+            lines = self.selected_text.split("\n")
+            new_lines = []
+            for line in lines:
+                new_lines.append(" " * spaces + line)
+            text = "\n".join(new_lines)
+            self.insert(text)
+
+
+    def _on_key(self, event: events.Key) -> None:
+
+        self.notify(str(event.aliases))
+        if event.character == "(":
+            self._insert_bookend_pair("(", ")")
+            event.prevent_default() 
+        elif event.character == "[":
+            self._insert_bookend_pair("[", "]")
+            event.prevent_default()
+        elif event.character == "{":
+            self._insert_bookend_pair("{", "}")
+            event.prevent_default()
+        elif event.character == "'":
+            self._insert_bookend_pair("'", "'")
+            event.prevent_default()
+        elif event.character == '"':
+            self._insert_bookend_pair('"', '"')
+            event.prevent_default()
+        elif event.character == "`":
+            self._insert_bookend_pair("`", "`")
+            event.prevent_default()
+        elif event.character == "<":
+            self._insert_bookend_pair("<", ">")
+            event.prevent_default()
+
+        elif event.aliases == {"shift+tab"}:
+            self.notify(str("SHIFT TAB"))
+
+            self._whitespace(-4)
+            event.prevent_default()
+             
+        elif event.character == "\t":
+            self._whitespace(4)
+            event.prevent_default()
+
+
+
 class Noteri(App):
     CSS_PATH = "noteri.tcss"
     COMMANDS = App.COMMANDS | {FileCommands} | {WidgetCommands}
@@ -311,18 +402,18 @@ class Noteri(App):
 
 
     def compose(self) -> ComposeResult:
-        ta = TextArea()
+        self.ta = ExtendedTextArea()
         for scm_file in Path(SCM_PATH).glob("*.scm"):
-            ta.register_language(get_language(scm_file.stem), scm_file.read_text())
+            self.app.ta.register_language(get_language(scm_file.stem), scm_file.read_text())
         
-        #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in ta.BINDINGS, and remove it
-        ta.BINDINGS = [b for b in ta.BINDINGS if b.key != "ctrl+x"]
-        ta.action_delete_line = self.action_cut
-        ta.delete_word_right = self.action_find
+        #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in self.ta.BINDINGS, and remove it
+        self.app.ta.BINDINGS = [b for b in self.ta.BINDINGS if b.key != "ctrl+x"]
+        self.app.ta.action_delete_line = self.action_cut
+        self.app.ta.delete_word_right = self.action_find
         with Vertical():
             with Horizontal():
                 yield DirectoryTree(self.directory)
-                yield ta
+                yield self.ta
                 with Vertical(id="md"):
                     yield Markdown("", id="title")
                     with ScrollableContainer():
@@ -332,7 +423,7 @@ class Noteri(App):
         yield Label(id="footer")
 
     def on_mount(self):
-        self.query_one("TextArea", expect_type=TextArea).focus()
+        self.ta.focus()
         self.query_one("#markdown", expect_type=Markdown).display = False
         self.open_file(self.filename)
         self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
@@ -341,7 +432,6 @@ class Noteri(App):
 
     @work(thread=True, exclusive=True)
     def print_footer(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
         unsaved_char = ""
         if self.unsaved_changes:
             unsaved_char = "*"
@@ -350,18 +440,18 @@ class Noteri(App):
         if self.filename is None:
             filename = "New File"
         
-        language = ta.language
+        language = self.ta.language
             
         if language is None:
             language = "Plain Text"
 
-        selected_text = ta.selected_text
+        selected_text = self.ta.selected_text
         #calculate selection width
         cursor_width = ""
         if len(selected_text) > 0:
             cursor_width = f" : {len(selected_text)}"
 
-        cursor_location = ta.cursor_location
+        cursor_location = self.ta.cursor_location
         self.query_one("#footer", expect_type=Label).update( 
         f"{self.selected_directory} {unsaved_char}{filename} | {language} | {str(cursor_location)}{cursor_width}"
         )
@@ -520,12 +610,11 @@ class Noteri(App):
 
         path = Path(path)
         
-        ta = self.query_one("TextArea", expect_type=TextArea)
 
         try:
             with open(path) as f:
                 text = f.read()
-                ta.load_text(text)
+                self.ta.load_text(text)
                 self.filename = path
                 self.selected_directory = path.parent
 
@@ -553,15 +642,15 @@ class Noteri(App):
 
         if path.suffix in file_extensions:
             try:
-                ta.language = file_extensions[path.suffix]
+                self.ta.language = file_extensions[path.suffix]
             except LanguageDoesNotExist:
                 self.notify(f"Issue loading {file_extensions[path.suffix]} language.", title="Language Error", severity="error")
-                ta.language = None
+                self.ta.language = None
             except NameError:
                 self.notify(f"Issue loading {file_extensions[path.suffix]} language.", title="Language Error", severity="error")
-                ta.language = None
+                self.ta.language = None
         else:
-            ta.language = None
+            self.ta.language = None
 
         md = self.query_one("#markdown", expect_type=Markdown)
         title = self.query_one("#title", expect_type=Markdown)
@@ -609,20 +698,20 @@ class Noteri(App):
         title = self.query_one("#title")
         backlinks = self.query_one("#backlinks")
 
-        ta = self.query_one("TextArea")
+        ta = self.ta
 
-        if markdown.display and ta.display:
+        if markdown.display and self.ta.display:
             md.styles.width = "50%"
-            ta.styles.width = "50%"
+            self.ta.styles.width = "50%"
         elif markdown.display:
             md.styles.width = "100%"
-            ta.styles.width = "0"
-        elif ta.display:
+            self.ta.styles.width = "0"
+        elif self.ta.display:
             md.styles.width = "0"
-            ta.styles.width = "100%"
+            self.ta.styles.width = "100%"
         else:
             md.styles.width = "0"
-            ta.styles.width = "0"
+            self.ta.styles.width = "0"
 
         # TODO: Cooler way of doing this
         md.display = markdown.display
@@ -645,7 +734,7 @@ class Noteri(App):
         filename = self.filename if new_filename is None else new_filename
 
         with open(filename, "w") as f:
-            f.write(self.query_one("TextArea", expect_type=TextArea).text)
+            f.write(self.ta.text)
         self.notify(f"Saved {filename}", title="Saved")
         self.filename = filename
         self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
@@ -654,11 +743,11 @@ class Noteri(App):
 
     def delete_file(self):
         dt = self.query_one("DirectoryTree", expect_type=DirectoryTree)
-        if dt.cursor_node.data.path.is_dir():
-            shutil.rmtree(dt.cursor_node.data.path)
+        if dt.cursor_node.daself.ta.path.is_dir():
+            shutil.rmtree(dt.cursor_node.daself.ta.path)
         else:
-            os.remove(dt.cursor_node.data.path)
-        self.notify(f"Deleted {dt.cursor_node.data.path}", title="Deleted")
+            os.remove(dt.cursor_node.daself.ta.path)
+        self.notify(f"Deleted {dt.cursor_node.daself.ta.path}", title="Deleted")
         dt.watch_path()
 
     def new_directory(self, directory_name):
@@ -667,7 +756,7 @@ class Noteri(App):
         self.notify(f"Created {directory_name}", title="Created")
 
     def rename_file(self, new_filename):
-        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.data.path
+        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.daself.ta.path
         if new_filename == path:
             return
         file_path = Path(new_filename)
@@ -685,7 +774,7 @@ class Noteri(App):
         
     def create_table(self, rows, columns, header):
         self.add_history()
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
         self.history_counter
         insert_text = ""
         if header:
@@ -696,11 +785,11 @@ class Noteri(App):
             row_text = f"|   {'|   '.join([''] * columns)}|\n"
             insert_text += row_text
 
-        ta.replace(insert_text, ta.selection.start, ta.selection.end)
+        self.ta.replace(insert_text, self.ta.selection.start, self.ta.selection.end)
 
     def cleanup_table(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        md_table = ta.selected_text
+        
+        md_table = self.ta.selected_text
 
         if md_table == "":
             return
@@ -732,7 +821,7 @@ class Noteri(App):
         clean_table = '\n'.join([rebuilt_header, rebuilt_separator] + rebuilt_table)
 
     
-        ta.replace(clean_table, ta.selection.start, ta.selection.end)
+        self.ta.replace(clean_table, self.ta.selection.start, self.ta.selection.end)
 
     def unsaved_changes_callback(self, value):
         if value:
@@ -758,39 +847,39 @@ class Noteri(App):
         self.push_screen(InputPopup(self.save_file, title="Save As", validators=[Length(minimum=1)]))
 
     def action_rename(self):
-        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.data.path
+        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.daself.ta.path
         self.push_screen(InputPopup(self.rename_file, title="Rename", validators=[Length(minimum=1)], default=str(path)))
     
     def action_delete(self):
         dt = self.query_one("DirectoryTree", expect_type=DirectoryTree)
-        self.push_screen(YesNoPopup(f"Delete {dt.cursor_node.data.path}", self.delete_file_callback))
+        self.push_screen(YesNoPopup(f"Delete {dt.cursor_node.daself.ta.path}", self.delete_file_callback))
     
     def action_copy(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        self.clipboard = ta.selected_text
+        
+        self.clipboard = self.ta.selected_text
         pyperclip.copy(self.clipboard)
         self.notify(f"{self.clipboard}", title="Copied")
 
     def action_cut(self):
         self.action_copy()
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        ta.delete(ta.selection.start, ta.selection.end)
+        
+        self.ta.delete(self.ta.selection.start, self.ta.selection.end)
         
     def action_paste(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        ta.replace(pyperclip.paste(), ta.selection.start, ta.selection.end)
+        
+        self.ta.replace(pyperclip.paste(), self.ta.selection.start, self.ta.selection.end)
 
     def action_table(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        if ta.selected_text != "":
+        
+        if self.ta.selected_text != "":
             self.cleanup_table()
             return
         self.push_screen(MarkdownTablePopup(self.create_table, validators=[Length(minimum=1)]))
 
     def action_bullet_list(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
         # in area selected, add a bullet to each line if it doesn't already exist
-        lines = ta.selected_text.split('\n')
+        lines = self.ta.selected_text.split('\n')
         refactored_lines = []
         for line in lines:
             # Check if the line already starts with a bullet
@@ -798,69 +887,69 @@ class Noteri(App):
                 line = f"- {line}"
             refactored_lines.append(line)
         
-        ta.replace('\n'.join(refactored_lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        self.ta.replace('\n'.join(refactored_lines), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     
     def action_numbered_list(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
         # In area selected, add "1. " to each line if not already numbered and not whitespace
-        lines = ta.selected_text.split('\n')
+        lines = self.ta.selected_text.split('\n')
         refactored_lines = []
         for line in lines:
             # Check if the line is not just whitespace and doesn't already start with a number followed by a dot and a space
             if line.strip() and not line.lstrip().startswith(tuple(f"{i}." for i in range(1, 10))):
                 line = f"1. {line}"
 
-        ta.replace('\n'.join(refactored_lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        self.ta.replace('\n'.join(refactored_lines), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def action_block_quote(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
         refactored_lines = []
         # If there is a selection, wrap it in a code block
-        for line in ta.selected_text.split('\n'):
+        for line in self.ta.selected_text.split('\n'):
             if not line.startswith('>'):
                 line = f"> {line}"
             refactored_lines.append(line)
-        ta.replace('\n'.join(refactored_lines), ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        self.ta.replace('\n'.join(refactored_lines), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def action_code_block(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
 
         # If there is a selection, wrap it in a code block
-        if ta.selected_text != "":
-            ta.replace(f"```\n{ta.selected_text}\n```", ta.selection.start, ta.selection.end)
+        if self.ta.selected_text != "":
+            self.ta.replace(f"```\n{self.ta.selected_text}\n```", self.ta.selection.start, self.ta.selection.end)
             return
 
     def action_create_link(self):
         self.create_link()
 
     def action_bold(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        ta.replace(f"**{ta.selected_text}**", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        
+        self.ta.replace(f"**{self.ta.selected_text}**", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def action_italic(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        ta.replace(f"*{ta.selected_text}*", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        
+        self.ta.replace(f"*{self.ta.selected_text}*", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def action_horizontal_rule(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        ta.replace(f"---", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        
+        self.ta.replace(f"---", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
     
     def action_heading(self, level):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        ta.replace(f"{'#' * level} {ta.selected_text}", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
+        
+        self.ta.replace(f"{'#' * level} {self.ta.selected_text}", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def action_find(self):
-        ta = self.app.push_screen(InputPopup(self.find_text, title="Find", validators=[Length(minimum=1)]))
+        self.app.push_screen(InputPopup(self.find_text, title="Find", validators=[Length(minimum=1)]))
         pass
 
     def find_text(self, search_text):
-        ta = self.query_one("TextArea", expect_type=TextArea)
-        cursor_location = ta.cursor_location
+        
+        cursor_location = self.ta.cursor_location
 
         # calculate the string index from a row collumn on newlines.
         
-        text = ta.text
+        text = self.ta.text
         split_lines = text.split("\n")
 
         #calculate lenths of each line and stop before greater than selection row
@@ -879,13 +968,13 @@ class Noteri(App):
             return
 
         else:
-            ta.selection = (cursor_location[0], col, cursor_location[0], col + len(search_text))
+            self.ta.selection = (cursor_location[0], col, cursor_location[0], col + len(search_text))
 
     def action_copy_link(self):
         
         #put link into clipboard
         text = f"[{self.filename.name}]({self.filename})"
-        pyperclip.copy(ta.selected_text)
+        pyperclip.copy(self.ta.selected_text)
 
     def add_history(self):
         if self.history_disabled:
@@ -893,14 +982,14 @@ class Noteri(App):
 
         ta = self.query_one("TextArea", TextArea)
         if self.history_index < len(self.history) - 1:
-            self.history[self.history_index] = { "text": ta.text, 
-                                                 "cursor_location": ta.cursor_location}
+            self.history[self.history_index] = { "text": self.ta.text, 
+                                                 "cursor_location": self.ta.cursor_location}
             #remove forward history
             self.history = self.history[:self.history_index + 1]
             #self.notify("Remove forward history")
         else:
-            self.history.append({ "text": ta.text, 
-                                  "cursor_location": ta.cursor_location})
+            self.history.append({ "text": self.ta.text, 
+                                  "cursor_location": self.ta.cursor_location})
         self.history_index += 1
         self.history_counter = 0
         #self.notify(f"add history. {self.history_index} {len(self.history)}")
@@ -911,15 +1000,15 @@ class Noteri(App):
             self.history_index = 9
 
     def action_undo(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
         self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
 
         if self.history_index > 0:
             self.history_index -= 1
             self.history_disabled = True
             self.add_history()
-            ta.load_text(self.history[self.history_index]["text"])
-            ta.cursor_location = self.history[self.history_index]["cursor_location"]
+            self.ta.load_text(self.history[self.history_index]["text"])
+            self.ta.cursor_location = self.history[self.history_index]["cursor_location"]
             self.history_counter = -1
             self.notify(f"{self.history_index} {len(self.history)}")
         
@@ -929,25 +1018,25 @@ class Noteri(App):
             self.add_history()
 
     def action_redo(self):
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
 
         if self.history_index < len(self.history) - 1:
             self.history_index += 1
             self.history_disabled = True
-            ta.load_text(self.history[self.history_index]["text"])
-            ta.cursor_location = self.history[self.history_index]["cursor_location"]
+            self.ta.load_text(self.history[self.history_index]["text"])
+            self.ta.cursor_location = self.history[self.history_index]["cursor_location"]
             self.history_counter = -1
         self.history_disabled = False
 
     def create_link(self, link:str=None, message=None, relative=True):
-        ta = self.query_one("TextArea", expect_type=TextArea)
+        
 
         if link == None:
             #TODO: Fuzzy match existing files
-            if ta.selected_text.startswith('htt') or ta.selected_text.startswith("#"):
-                link = ta.selected_text
-            elif  ta.selected_text.endswith(".md"):
-                link = ta.selected_text
+            if self.ta.selected_text.startswith('htt') or self.ta.selected_text.startswith("#"):
+                link = self.ta.selected_text
+            elif  self.ta.selected_text.endswith(".md"):
+                link = self.ta.selected_text
             else:
                 link = ""
 
@@ -959,18 +1048,18 @@ class Noteri(App):
                 link = link_path.relative_to(self.selected_directory)
             except ValueError as e:
                 self.notify(f"Could not find relative path for {link_path}, using abs")
-                link = ta.selected_text
+                link = self.ta.selected_text
 
         if message == None and str(link).endswith(".md"):
             message = str(Path(link).name)[:-3]
 
         if message == None:
-            if ta.selected_text == "":
+            if self.ta.selected_text == "":
                 message = ""
             else:
-                message = ta.selected_text
+                message = self.ta.selected_text
 
-        ta.replace(f"[{message}]({link})", ta.selection.start, ta.selection.end, maintain_selection_offset=False)        
+        self.ta.replace(f"[{message}]({link})", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)        
 
     @on(FileSystemCallback)
     def callback_message(self, message:FileSystemCallback):
