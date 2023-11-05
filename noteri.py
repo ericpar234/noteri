@@ -17,7 +17,7 @@ from textual.command import Hit, Hits, Provider
 import os
 import argparse
 from tree_sitter_languages import get_language
-
+import shutil
 
 SCM_PATH = "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/"
 
@@ -318,13 +318,13 @@ class Noteri(App):
         #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in ta.BINDINGS, and remove it
         ta.BINDINGS = [b for b in ta.BINDINGS if b.key != "ctrl+x"]
         ta.action_delete_line = self.action_cut
-
+        ta.delete_word_right = self.action_find
         with Vertical():
             with Horizontal():
                 yield DirectoryTree(self.directory)
                 yield ta
                 with Vertical(id="md"):
-                    yield Label("", id="title")
+                    yield Markdown("", id="title")
                     with ScrollableContainer():
                         yield Markdown(id="markdown")
                         yield Markdown(id="backlinks")
@@ -370,11 +370,17 @@ class Noteri(App):
     def cursor_moved(self, event:TextArea.SelectionChanged) -> None:
         self.print_footer()
 
+    def update_markdown(self, text):
+
+        #create a timer to update the markdown in case of rapid typing
+        self.query_one("#markdown", expect_type=Markdown).update(text)
+
     @on(TextArea.Changed)
+
     def text_area_changed(self, event:TextArea.Changed) -> None:
         self.history_counter += 1
         self.unsaved_changes = True
-        self.query_one("#markdown", expect_type=Markdown).update(event.text_area.text)
+        self.update_markdown(event.text_area.text)
         self.print_footer()
 
         if self.history_counter > 5:
@@ -527,7 +533,8 @@ class Noteri(App):
             self.notify(f"File not found: {path}", severity="error", title="FileNotFoundError")
             return
         except UnicodeDecodeError as e:
-            self.notify(f"File is not a text file: {path}", severity="error", title="UnicodeDecodeError")
+            #self.notify(f"File is not a text file: {path}", severity="error", title="UnicodeDecodeError")
+            os.system(f"open {path}")
             return
          
         file_extensions = {
@@ -557,7 +564,7 @@ class Noteri(App):
             ta.language = None
 
         md = self.query_one("#markdown", expect_type=Markdown)
-        title = self.query_one("#title", expect_type=Label)
+        title = self.query_one("#title", expect_type=Markdown)
         backlinks = self.query_one("#backlinks", expect_type=Markdown)
 
         if path.suffix == ".md":
@@ -565,7 +572,7 @@ class Noteri(App):
             title.display = True
             backlinks.display = True
             md.update(text)
-            title.update(str(self.filename.parts[-1])[:-3])
+            title.update("## " + str(self.filename.parts[-1])[:-3])
             self.update_backlinks()
 
         else:
@@ -646,9 +653,13 @@ class Noteri(App):
         self.print_footer()
 
     def delete_file(self):
-        os.remove(self.filename)
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
-        self.notify(f"Deleted {self.filename}", title="Deleted")
+        dt = self.query_one("DirectoryTree", expect_type=DirectoryTree)
+        if dt.cursor_node.data.path.is_dir():
+            shutil.rmtree(dt.cursor_node.data.path)
+        else:
+            os.remove(dt.cursor_node.data.path)
+        self.notify(f"Deleted {dt.cursor_node.data.path}", title="Deleted")
+        dt.watch_path()
 
     def new_directory(self, directory_name):
         os.mkdir(directory_name)
@@ -656,14 +667,22 @@ class Noteri(App):
         self.notify(f"Created {directory_name}", title="Created")
 
     def rename_file(self, new_filename):
-        if new_filename == self.filename:
+        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.data.path
+        if new_filename == path:
             return
+        file_path = Path(new_filename)
+
+        if path.is_dir():
+            # move directory
+            os.rename(str(path), new_filename)
+            self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        elif path.is_file():
+            tmp = self.filename
+            self.save_file(new_filename)
+            os.remove(tmp)
+            self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        return
         
-        tmp = self.filename
-        self.save_file(new_filename)
-        os.remove(tmp)
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
-    
     def create_table(self, rows, columns, header):
         self.add_history()
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -739,10 +758,12 @@ class Noteri(App):
         self.push_screen(InputPopup(self.save_file, title="Save As", validators=[Length(minimum=1)]))
 
     def action_rename(self):
-        self.push_screen(InputPopup(self.rename_file, title="Rename", validators=[Length(minimum=1)], default=str(self.filename)))
+        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.data.path
+        self.push_screen(InputPopup(self.rename_file, title="Rename", validators=[Length(minimum=1)], default=str(path)))
     
     def action_delete(self):
-        self.push_screen(YesNoPopup(f"Delete {self.filename}", self.delete_file_callback))
+        dt = self.query_one("DirectoryTree", expect_type=DirectoryTree)
+        self.push_screen(YesNoPopup(f"Delete {dt.cursor_node.data.path}", self.delete_file_callback))
     
     def action_copy(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
@@ -830,7 +851,35 @@ class Noteri(App):
         ta.replace(f"{'#' * level} {ta.selected_text}", ta.selection.start, ta.selection.end, maintain_selection_offset=False)
 
     def action_find(self):
+        ta = self.app.push_screen(InputPopup(self.find_text, title="Find", validators=[Length(minimum=1)]))
         pass
+
+    def find_text(self, search_text):
+        ta = self.query_one("TextArea", expect_type=TextArea)
+        cursor_location = ta.cursor_location
+
+        # calculate the string index from a row collumn on newlines.
+        
+        text = ta.text
+        split_lines = text.split("\n")
+
+        #calculate lenths of each line and stop before greater than selection row
+        col = -1
+        tmp_find_col = -1
+        split_lines[0] = split_lines[0][cursor_location[1]:]
+        for line in split_lines[cursor_location[0]:]:
+            tmp_find_col = line.find(search_text)
+            self.notify(f"Line: {line} {tmp_find_col}")
+            if tmp_find_col != -1:
+                col = tmp_find_col
+            break
+
+        if col == -1:
+            self.notify(f"Could not find text {search_text}. Selection {cursor_location}. ", title="Find", severity="warning")
+            return
+
+        else:
+            ta.selection = (cursor_location[0], col, cursor_location[0], col + len(search_text))
 
     def action_copy_link(self):
         
@@ -848,13 +897,13 @@ class Noteri(App):
                                                  "cursor_location": ta.cursor_location}
             #remove forward history
             self.history = self.history[:self.history_index + 1]
-            self.notify("Remove forward history")
+            #self.notify("Remove forward history")
         else:
             self.history.append({ "text": ta.text, 
                                   "cursor_location": ta.cursor_location})
         self.history_index += 1
         self.history_counter = 0
-        self.notify(f"add history. {self.history_index} {len(self.history)}")
+        #self.notify(f"add history. {self.history_index} {len(self.history)}")
 
         # make self.history only latest 10
         if len(self.history) > 10:
@@ -875,6 +924,9 @@ class Noteri(App):
             self.notify(f"{self.history_index} {len(self.history)}")
         
         self.history_disabled = False
+
+        if self.history_index == 0:
+            self.add_history()
 
     def action_redo(self):
         ta = self.query_one("TextArea", expect_type=TextArea)
