@@ -9,6 +9,7 @@ from textual import on
 from textual import work
 from textual.binding import Binding
 from textual import events
+import re
 import pyperclip 
 
 from functools import partial
@@ -122,7 +123,9 @@ class FileCommands(Provider):
             "Block Quote": partial(app.action_block_quote),
             "Bold": partial(app.action_bold),
             "Italic": partial(app.action_italic),
+            "Strikethrough": partial(app.action_strikethrough),
             "Horizontal Rule": partial(app.action_horizontal_rule),
+            "Table of Contents": partial(app.action_table_of_contents),
             "Heading 1": partial(app.action_heading, 1),
             "Heading 2": partial(app.action_heading, 2),
             "Heading 3": partial(app.action_heading, 3),
@@ -242,32 +245,158 @@ class FileSelectionPopup(ModalScreen):
     
 class ExtendedTextArea(TextArea):
     """A subclass of TextArea with parenthesis-closing functionality."""
+    BINDINGS = [
+        Binding("escape", "screen.focus_next", "Shift Focus", show=False),
+        # Cursor movement
+        Binding("up", "cursor_up", "cursor up", show=False),
+        Binding("down", "cursor_down", "cursor down", show=False),
+        Binding("left", "cursor_left", "cursor left", show=False),
+        Binding("right", "cursor_right", "cursor right", show=False),
+        Binding("ctrl+left", "cursor_word_left", "cursor word left", show=False),
+        Binding("ctrl+right", "cursor_word_right", "cursor word right", show=False),
+        Binding("home,ctrl+a", "cursor_line_start", "cursor line start", show=False),
+        Binding("end,ctrl+e", "cursor_line_end", "cursor line end", show=False),
+        Binding("pageup", "cursor_page_up", "cursor page up", show=False),
+        Binding("pagedown", "cursor_page_down", "cursor page down", show=False),
+        # Making selections (generally holding the shift key and moving cursor)
+        Binding(
+            "ctrl+shift+left",
+            "cursor_word_left(True)",
+            "cursor left word select",
+            show=False,
+        ),
+        Binding(
+            "ctrl+shift+right",
+            "cursor_word_right(True)",
+            "cursor right word select",
+            show=False,
+        ),
+        Binding(
+            "shift+home",
+            "cursor_line_start(True)",
+            "cursor line start select",
+            show=False,
+        ),
+        Binding(
+            "shift+end", "cursor_line_end(True)", "cursor line end select", show=False
+        ),
+        Binding("shift+up", "cursor_up(True)", "cursor up select", show=False),
+        Binding("shift+down", "cursor_down(True)", "cursor down select", show=False),
+        Binding("shift+left", "cursor_left(True)", "cursor left select", show=False),
+        Binding("shift+right", "cursor_right(True)", "cursor right select", show=False),
+        # Shortcut ways of making selections
+        # Binding("f5", "select_word", "select word", show=False),
+        Binding("f6", "select_line", "select line", show=False),
+        Binding("f7", "select_all", "select all", show=False),
+        # Deletion
+        Binding("backspace", "delete_left", "delete left", show=False),
+        Binding(
+            "ctrl+w", "delete_word_left", "delete left to start of word", show=False
+        ),
+        Binding("delete,ctrl+d", "delete_right", "delete right", show=False),
+        Binding(
+            "ctrl+u", "delete_to_start_of_line", "delete to line start", show=False
+        ),
+        Binding("ctrl+k", "delete_to_end_of_line", "delete to line end", show=False),
+    ]
 
-    def _insert_bookend_pair(self, bookend_start: str, bookend_end: str) -> None:
+
+
+    def _insert_bookend_pair(self, bookend_start: str, bookend_end: str, only_selection = False) -> None:
         self.selected_text
-        if self.selected_text == "":
+        if self.selected_text == "" and not only_selection:
+            #check if surrounding text is already a pair
+            start = self.cursor_location
+            start = (start[0], start[1] - 1)
+            end   = self.cursor_location
+            end   = (end[0], end[1] + 1)
+
+            if self.get_text_range(start, end) == bookend_start + bookend_end:
+                self.move_cursor_relative(columns=1)
+                return
             self.insert(bookend_start + bookend_end)
             self.move_cursor_relative(columns=-1)
         else:
             selection = self.selection
-            text = bookend_start + self.selection + bookend_end
-            self.insert(text)
-            self.selection = (selection.start, selection.end + len(bookend_end + bookend_start))
-        
+            text = bookend_start + self.selected_text + bookend_end
+            self.replace(text, selection.start, selection.end)
+            #self.selection = (selection.start, selection.end + len(bookend_end + bookend_start))
+    def _next_cell(self, forwards:bool) -> bool:
+        text = self.get_text_range(self.get_cursor_line_start_location(), self.cursor_location)
+
+        if not self.selected_text == "":
+            self.notify("Selected text")
+            return False
+
+        if not text.startswith("|"):
+            self.notify("Starts with")
+            return False
+
+        # if in markdown table go to next cell
+        if not self.language == "markdown":
+            self.notify("Markdown")
+            return False
+
+        cursor = self.cursor_location
+        if forwards:
+            start = (cursor[0], cursor[1] + 1)
+            end = self.get_cursor_line_end_location()
+        else:
+            start = self.get_cursor_line_start_location()
+            end = (cursor[0], cursor[1] - 1)
+
+        text = self.get_text_range(start, end)
+        #find next pipe
+        if forwards:
+            match = re.search(r'\|', text)
+            if match:
+                space = 3
+                match_start = match.start() + space
+                self.move_cursor_relative(columns=match_start)
+                self.notify(f"Moving cursor forward to {match_start}. Searched from {str(start)} to {str(end)}")
+                return True
+        else:
+            # When moving backwards, we need to find the pipe that comes before the cursor's current position
+            start = self.get_cursor_line_start_location()
+            end = (cursor[0], cursor[1] - 1)
+
+            # Extract the text range for searching
+            text_before_cursor = self.get_text_range(start, end)
+
+            # Find the last pipe in the text before the cursor
+            match = re.search(r'\|(?=[^\|]*$)', text_before_cursor)
+            if match:
+                # Calculate the position of the cursor relative to the start of the line
+                match_pos = match.start()
+
+                # Move cursor to the left of the matched pipe character
+                # We subtract from the cursor's current column position the difference
+                # between the match position and the end column position of the text before the cursor
+                cursor_move_distance = match_pos - end[1]
+                self.move_cursor_relative(columns=cursor_move_distance)
+                self.notify(f"Moving cursor backwards to {cursor_move_distance}. Searched from {str(start)} to {str(end)}")
+                return True
+            
+        self.notify(f"No match from {str(start)} to {str(end)}")
+        return False 
+    
     def _whitespace(self, spaces: int) -> None:
         
+        start_location = self.get_cursor_line_start_location()
+
         if spaces < 0:
             spaces = abs(spaces)
             if self.selected_text == "":
-                start_location = self.get_cursor_line_start_location()
                 text = self.get_text_range(start_location, self.cursor_location)
                 # remove leading whitespace from text up to spaces number if whitepsace exists
                 if text.startswith(" " * spaces):
                     text = text[spaces:]
                     self.replace(text, start_location, self.cursor_location)
+                    return
                 elif text.startswith("\t"):
                     text = text[1:]
                     self.replace(text, start_location, self.cursor_location)
+                    return
             else:
                 selection = self.selection
                 lines = self.selected_text.split("\n")
@@ -278,8 +407,8 @@ class ExtendedTextArea(TextArea):
                     else:
                         new_lines.append(line)
                 text = "\n".join(new_lines)
-                self.insert(text)
-                self.selection = (selection.start, selection.end - spaces)
+                self.replace(text, selection.start, selection.end)
+                #self.selection.end = (selection.end[0], selection.end[1] - spaces)
             return
 
         if self.selected_text == "":
@@ -291,12 +420,121 @@ class ExtendedTextArea(TextArea):
             for line in lines:
                 new_lines.append(" " * spaces + line)
             text = "\n".join(new_lines)
-            self.insert(text)
+            self.replace(text, selection.start, selection.end)
+
+    def _continue_list(self, previous_line) -> None:
+
+        # if - or 1. continue list with same amount of whitespace as found string
+        leading_whitespace = re.match(r'(\s*)', previous_line).group(1)
+
+        match = re.match(r'\s*-\s\[\s\]\s[^\s]*', previous_line)  # Check for todo list
+        if match:
+            return f'\n{leading_whitespace}- [ ] '
+
+        # Determine the type of list from the previous line
+        match = re.match(r'\s*(\d+)\.\s[^\s]', previous_line)  # Check for numbered list
+        if match:
+            next_number = int(match.group(1)) + 1
+            return f'\n{leading_whitespace}{next_number}. '
+
+        match = re.match(r'\s*-\s[^\s]', previous_line)  # Check for bulleted list
+        if match:
+            return f'\n{leading_whitespace}- '
+
+        # Regular expression to match a markdown table row
+        table_row_re = re.compile(r'^\s*\|?(?:[^\|]*\|)+[^\|]*\|?\s*$')
 
 
+        # check if next line can be calculated
+
+        if self.cursor_location[0] != self.get_cursor_down_location()[0]:
+            # Get the start and end locations of the next line
+            next_start = self.get_cursor_line_start_location()
+            next_start = (next_start[0] + 1, next_start[1])
+            next_end = self.get_cursor_line_end_location()
+            next_end = (next_end[0] + 1, next_end[1])
+
+            # Retrieve the next line of text
+            next_line = self.get_text_range(next_start, next_end)
+
+            # Notify about the next line - for debugging purposes
+            #self.notify(f"Next line: {next_line}")
+            next_line_match = table_row_re.match(next_line)
+        else:
+            next_line_match = False
+
+        #TODO: Hack
+        previous_line = self.document.get_line(self.cursor_location[0] - 1)
+
+        # Check if the previous line is a table row and the next line is not
+        if table_row_re.match(previous_line) and not next_line_match:
+            # Split the previous line into columns, taking into account leading and trailing spaces within the cells
+            # We also maintain the outer spaces outside the first and last pipe
+            leading_spaces = previous_line[:previous_line.find('|')]
+            trailing_spaces = previous_line[previous_line.rfind('|')+1:]
+            columns = previous_line.strip().split('|')[1:-1]  # Exclude the first and last empty elements after strip
+            
+            # Create a new row that maintains the same spacing as the previous row's columns
+            new_row = leading_spaces + '\n|' + '|'.join(' ' * len(col) for col in columns) + '|' + trailing_spaces
+            self.insert(new_row, (self.cursor_location[0], len(self.document.lines[self.cursor_location[0]])))
+            return None
+
+        # Check if the next line is a table row
+        elif next_line_match:
+            # Assuming you are in a table and next_line_match is True, indicating the next line is also a table row
+
+            # Get the content of the current line up to the cursor's column position
+            current_cursor_row, current_cursor_column = self.cursor_location
+            current_line_start = (current_cursor_row, 0)
+            current_line_up_to_cursor = self.get_text_range(current_line_start, self.cursor_location)
+
+            # Count the number of pipes (cells) before the cursor on the current line to find the cell index
+            cell_index = current_line_up_to_cursor.count('|')
+
+            # Move the cursor down one row
+            self.move_cursor_relative(rows=1)
+
+            # Now retrieve the content of the next line
+            next_line_start = (current_cursor_row + 1, 0)
+            next_line_end = self.get_cursor_line_end_location()
+            next_line_end = (next_line_end[0] + 1, next_line_end[1])
+            next_line = self.get_text_range(next_line_start, next_line_end)
+
+            # Find the position of the same cell in the next line by finding the nth pipe
+            # corresponding to the cell index
+            pipe_count = 0
+            column_position = 0
+            for char in next_line:
+                if char == '|':
+                    pipe_count += 1
+                if pipe_count == cell_index:
+                    break
+                column_position += 1
+
+            # Now we have the column position of the pipe that marks the beginning of the target cell in the next line
+            # We move the cursor to the right of that pipe, which should be the start of the cell
+            # We need to add 1 to position the cursor inside the cell, right after the pipe
+            self.move_cursor_relative(columns=column_position - current_cursor_column + 1)
+
+            return None
+
+        return '\n'
+
+
+    
+    def _newline(self) -> None:
+        start_location = self.get_cursor_line_start_location()
+        previous_line = self.get_text_range(start_location, self.cursor_location)
+
+        # If the previous line is a list, continue the list
+        ret = self._continue_list(previous_line)
+        if ret != None:
+            self.insert(ret)
+            return
+        
     def _on_key(self, event: events.Key) -> None:
+        #self.notify(f"{event.character}  |  {event.aliases}")
 
-        self.notify(str(event.aliases))
         if event.character == "(":
             self._insert_bookend_pair("(", ")")
             event.prevent_default() 
@@ -318,15 +556,31 @@ class ExtendedTextArea(TextArea):
         elif event.character == "<":
             self._insert_bookend_pair("<", ">")
             event.prevent_default()
+        elif event.character == "~":
+            self._insert_bookend_pair("~", "~", only_selection = True)
+            event.prevent_default()
+        elif event.character == "*":
+            self._insert_bookend_pair("*", "*", only_selection = True)
+            event.prevent_default()
 
-        elif event.aliases == {"shift+tab"}:
-            self.notify(str("SHIFT TAB"))
-
-            self._whitespace(-4)
+        elif "shift+tab" in event.aliases:
+            if not self._next_cell(False):
+                self._whitespace(-4)
             event.prevent_default()
              
         elif event.character == "\t":
-            self._whitespace(4)
+            if not self._next_cell(True):
+                self._whitespace(4)
+            event.prevent_default()
+        
+        elif "shift+enter" in event.aliases:
+            regex = table_row_re = re.compile(r'^\s*\|?(?:[^\|]*\|)+[^\|]*\|?\s*$')
+            if regex.match(self.get_text_range(self.get_cursor_line_start_location(), self.get_cursor_line_end_location)):
+                self.move_cursor_relative(rows=-11)
+
+        # if enter in list of aliases
+        elif "enter" in event.aliases:
+            self._newline()
             event.prevent_default()
 
 
@@ -341,9 +595,11 @@ class Noteri(App):
         Binding("ctrl+r", "rename", "Rename File"),
         Binding("ctrl+d", "delete", "Delete File"),
         Binding("ctrl+shift+x", "cut", "Cut Text", priority=True),
-        Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
+        #Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
+        Binding("ctrl+y", "copy", "Copy Text", priority=True),
         Binding("ctrl+shift+v", "paste", "Paste Text", priority=True),
-        Binding("ctrl+f", "find", "Find Text"),
+        Binding("ctrl+v", "paste", "Paste Text", priority=True),
+        Binding("ctrl+f", "find", "Find Text", priority=True),
         Binding("ctrl+t", "table", "Create Table"),
         Binding("ctrl+shift+t", "bullet_list", "Create Bullet List"),
         Binding("ctrl+shift+n", "numbered_list", "Create Numbered List"),
@@ -388,6 +644,7 @@ class Noteri(App):
         self.history = []
         self.history_disabled = False
         self.history_counter = 0
+        self.markdown_updates = []
 
         path = Path(path)
         if path.is_file():
@@ -406,7 +663,7 @@ class Noteri(App):
         for scm_file in Path(SCM_PATH).glob("*.scm"):
             self.app.ta.register_language(get_language(scm_file.stem), scm_file.read_text())
         
-        #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in self.ta.BINDINGS, and remove it
+        #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in self.ta., and remove it
         self.app.ta.BINDINGS = [b for b in self.ta.BINDINGS if b.key != "ctrl+x"]
         self.app.ta.action_delete_line = self.action_cut
         self.app.ta.delete_word_right = self.action_find
@@ -419,6 +676,7 @@ class Noteri(App):
                     with ScrollableContainer():
                         yield Markdown(id="markdown")
                         yield Markdown(id="backlinks")
+                        #yield RadioButton(id="todo")
 
         yield Label(id="footer")
 
@@ -426,9 +684,12 @@ class Noteri(App):
         self.ta.focus()
         self.query_one("#markdown", expect_type=Markdown).display = False
         self.open_file(self.filename)
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
+        self.dt = self.query_one("DirectoryTree", expect_type=DirectoryTree)
+        self.refresh_directory_tree()
         self.print_footer()
+        #self.query_one("#radio_buttons", expect_type=RadioButton).display = False
         pass
+
 
     @work(thread=True, exclusive=True)
     def print_footer(self):
@@ -460,18 +721,26 @@ class Noteri(App):
     def cursor_moved(self, event:TextArea.SelectionChanged) -> None:
         self.print_footer()
 
-    def update_markdown(self, text):
+    def _update_markdown_worker(self):
+        text = self.markdown_updates.pop()
+        while text:
+            self.query_one("#markdown", expect_type=Markdown).update(text)
+            try:
+                text = self.markdown_updates.pop()
+            except IndexError:
+                text = None
 
+
+    def update_markdown(self, text):
+        self.markdown_updates.append(text)
+        self._update_markdown_worker()
         #create a timer to update the markdown in case of rapid typing
-        self.query_one("#markdown", expect_type=Markdown).update(text)
 
     @on(TextArea.Changed)
-
     def text_area_changed(self, event:TextArea.Changed) -> None:
         self.history_counter += 1
         self.unsaved_changes = True
         self.update_markdown(event.text_area.text)
-        self.print_footer()
 
         if self.history_counter > 5:
             self.add_history()
@@ -489,12 +758,15 @@ class Noteri(App):
     def linked_clicked(self, message:Markdown.LinkClicked ):
         self.toggle_class("DirectoryTree")
         #read first character of path
-        if message.href[0] == "#":
-            self.query_one("#markdown", expect_type=Markdown).goto_anchor(message.href[1:])
+
+        href = message.href.replace("%20", " ")
+        #href = message.href
+        if href[0] == "#":
+            self.query_one("#markdown", expect_type=Markdown).goto_anchor(href[1:])
             return
-        if message.href.startswith("http"):
-            self.notify(f"Opening external link {message.href}")
-            os.system(f"open {message.href}")
+        if href.startswith("http"):
+            self.notify(f"Opening external link {href}")
+            os.system(f"open {href}")
             return
         
         file_suffixs = [
@@ -545,17 +817,17 @@ class Noteri(App):
         ]
 
         for suffix in file_suffixs:
-            if message.href.endswith(suffix):
-                self.notify(f"Opening external file {self.filename.parent}/{message.href}")
-                os.system(f"open {self.filename.parent}/{message.href}")
+            if href.endswith(suffix):
+                self.notify(f"Opening external file {self.filename.parent}/{href}")
+                os.system(f"open \"{self.filename.parent}/{href}\"")
                 return                
 
         #get subdirectory of filepath
-        #path = Path(self.filename).parent / message.href
+        #path = Path(self.filename).parent / href
         if message.markdown.id == "backlinks":
-            path = Path(message.href)
+            path = Path(href)
         else:
-            path = Path(self.filename).parent / message.href
+            path = Path(self.filename).parent / href
 
         self.open_file(path)
 
@@ -623,7 +895,7 @@ class Noteri(App):
             return
         except UnicodeDecodeError as e:
             #self.notify(f"File is not a text file: {path}", severity="error", title="UnicodeDecodeError")
-            os.system(f"open {path}")
+            os.system(f"open \"{path}\"")
             return
          
         file_extensions = {
@@ -718,11 +990,36 @@ class Noteri(App):
         title.display = markdown.display
         backlinks.display = markdown.display
 
+    def _refresh_directory_tree_helper(self, search_text, node):
+        if node.data.path.is_dir():
+            for child in node.children:
+                self._refresh_directory_tree_helper(search_text, child)
+        else:
+            if search_text == "":
+                node.display = True
+            else:
+                if search_text in node.data.path.name:
+                    node.display = True
+                else:
+                    node.display = False
+
+
+    @work(exclusive=True)
+    async def refresh_directory_tree(self):
+        await self.dt.reload_node(self.dt.root)
+
+        children = []
+
+        #self._refresh_directory_tree_helper(self.)
+        
+        
+        #self.node.expand()
+        return
 
     def new_file(self, file_name):
         with open(file_name, "w") as f:
             f.write("")
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
+        self.refresh_directory_tree()
         self.open_file(Path(file_name))
         self.notify(f"Created {file_name}", title="Created")
     
@@ -737,39 +1034,37 @@ class Noteri(App):
             f.write(self.ta.text)
         self.notify(f"Saved {filename}", title="Saved")
         self.filename = filename
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).watch_path()
+        self.dt.reload_node(self.dt.root)
         self.unsaved_changes = False
         self.print_footer()
 
     def delete_file(self):
-        dt = self.query_one("DirectoryTree", expect_type=DirectoryTree)
-        if dt.cursor_node.daself.ta.path.is_dir():
-            shutil.rmtree(dt.cursor_node.daself.ta.path)
+        if self.dt.cursor_node.data.path.is_dir():
+            shutil.rmtree(self.dt.cursor_node.data.path)
         else:
-            os.remove(dt.cursor_node.daself.ta.path)
-        self.notify(f"Deleted {dt.cursor_node.daself.ta.path}", title="Deleted")
-        dt.watch_path()
+            os.remove(self.dt.cursor_node.data.path)
+        self.notify(f"Deleted {self.dt.cursor_node.data.path}", title="Deleted")
+        self.refresh_directory_tree()
 
     def new_directory(self, directory_name):
         os.mkdir(directory_name)
-        self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+        self.refresh_directory_tree()
         self.notify(f"Created {directory_name}", title="Created")
 
     def rename_file(self, new_filename):
-        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.daself.ta.path
+        path = self.dt.cursor_node.data.path
         if new_filename == path:
             return
-        file_path = Path(new_filename)
 
         if path.is_dir():
             # move directory
             os.rename(str(path), new_filename)
-            self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+            self.dt.watch_tree()
         elif path.is_file():
             tmp = self.filename
             self.save_file(new_filename)
             os.remove(tmp)
-            self.query_one("DirectoryTree", expect_type=DirectoryTree).reload()
+            self.dt.watch_tree()
         return
         
     def create_table(self, rows, columns, header):
@@ -847,12 +1142,11 @@ class Noteri(App):
         self.push_screen(InputPopup(self.save_file, title="Save As", validators=[Length(minimum=1)]))
 
     def action_rename(self):
-        path = self.query_one("DirectoryTree", expect_type=DirectoryTree).cursor_node.daself.ta.path
+        path = self.dt.cursor_node.data.path
         self.push_screen(InputPopup(self.rename_file, title="Rename", validators=[Length(minimum=1)], default=str(path)))
     
     def action_delete(self):
-        dt = self.query_one("DirectoryTree", expect_type=DirectoryTree)
-        self.push_screen(YesNoPopup(f"Delete {dt.cursor_node.daself.ta.path}", self.delete_file_callback))
+        self.push_screen(YesNoPopup(f"Delete {self.dt.cursor_node.data.path}", self.delete_file_callback))
     
     def action_copy(self):
         
@@ -875,6 +1169,26 @@ class Noteri(App):
             self.cleanup_table()
             return
         self.push_screen(MarkdownTablePopup(self.create_table, validators=[Length(minimum=1)]))
+
+    def action_table_of_contents(self):
+
+        # generate a talbe of contents for the current file and insert in current cursor location
+        # get all headers
+        toc = []
+        lines = self.ta.text.split('\n')
+        previous_level = 1
+        for line in lines:
+            match = re.match(r'(#+) (.+)', line)
+            if match:
+                level = len(match.group(1))
+                if previous_level < level:
+                    for l in range(previous_level, level -1):
+                        toc.append(f"{'  ' * (l - 1)}-  |")
+                previous_level = level
+                title = match.group(2).strip()
+                toc.append(f"{'  ' * (level - 1)}- [{title}](#{title.replace(' ', '-').lower()})")
+        self.ta.replace('\n'.join(toc), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
+        # get all links
 
     def action_bullet_list(self):
         
@@ -942,6 +1256,9 @@ class Noteri(App):
     def action_find(self):
         self.app.push_screen(InputPopup(self.find_text, title="Find", validators=[Length(minimum=1)]))
         pass
+    
+    def action_strikethrough(self):
+        self.ta.replace(f"~~{self.ta.selected_text}~~", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def find_text(self, search_text):
         
@@ -954,21 +1271,23 @@ class Noteri(App):
 
         #calculate lenths of each line and stop before greater than selection row
         col = -1
+        row = -1
         tmp_find_col = -1
         split_lines[0] = split_lines[0][cursor_location[1]:]
-        for line in split_lines[cursor_location[0]:]:
+        for i, line in enumerate(split_lines[cursor_location[0]:]):
             tmp_find_col = line.find(search_text)
-            self.notify(f"Line: {line} {tmp_find_col}")
             if tmp_find_col != -1:
                 col = tmp_find_col
-            break
+                break
+        row = i + cursor_location[0]
 
         if col == -1:
-            self.notify(f"Could not find text {search_text}. Selection {cursor_location}. ", title="Find", severity="warning")
+            self.notify(f"Reached bottom of doc searching for {search_text}.")
             return
 
         else:
-            self.ta.selection = (cursor_location[0], col, cursor_location[0], col + len(search_text))
+            self.ta.move_cursor((row, col))
+            self.ta.move_cursor_relative(columns=len(search_text), select=True)
 
     def action_copy_link(self):
         
@@ -1001,7 +1320,7 @@ class Noteri(App):
 
     def action_undo(self):
         
-        self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
+        #self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
 
         if self.history_index > 0:
             self.history_index -= 1
@@ -1010,7 +1329,6 @@ class Noteri(App):
             self.ta.load_text(self.history[self.history_index]["text"])
             self.ta.cursor_location = self.history[self.history_index]["cursor_location"]
             self.history_counter = -1
-            self.notify(f"{self.history_index} {len(self.history)}")
         
         self.history_disabled = False
 
