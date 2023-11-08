@@ -11,7 +11,7 @@ from textual.binding import Binding
 from textual import events
 import re
 import pyperclip 
-
+import threading
 from functools import partial
 from pathlib import Path
 from textual.command import Hit, Hits, Provider
@@ -19,6 +19,9 @@ import os
 import argparse
 from tree_sitter_languages import get_language
 import shutil
+import time
+
+
 
 SCM_PATH = "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/"
 
@@ -645,6 +648,12 @@ class Noteri(App):
         self.history_disabled = False
         self.history_counter = 0
         self.markdown_updates = []
+        self.write_lock = threading.Lock()
+        self.read_lock = threading.Lock()
+        self.last_write_time = 0
+        self.unprinted_changes = True
+
+        self.worker_thread = None
 
         path = Path(path)
         if path.is_file():
@@ -659,9 +668,10 @@ class Noteri(App):
 
 
     def compose(self) -> ComposeResult:
-        self.ta = ExtendedTextArea()
+        self.ta = ExtendedTextArea(id="text_area")
         for scm_file in Path(SCM_PATH).glob("*.scm"):
             self.app.ta.register_language(get_language(scm_file.stem), scm_file.read_text())
+        self.markdown = Markdown(id="markdown")
         
         #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in self.ta., and remove it
         self.app.ta.BINDINGS = [b for b in self.ta.BINDINGS if b.key != "ctrl+x"]
@@ -674,7 +684,7 @@ class Noteri(App):
                 with Vertical(id="md"):
                     yield Markdown("", id="title")
                     with ScrollableContainer():
-                        yield Markdown(id="markdown")
+                        yield self.markdown
                         yield Markdown(id="backlinks")
                         #yield RadioButton(id="todo")
 
@@ -688,7 +698,8 @@ class Noteri(App):
         self.refresh_directory_tree()
         self.print_footer()
         #self.query_one("#radio_buttons", expect_type=RadioButton).display = False
-        pass
+        self.run_worker(self._update_markdown_worker, exit_on_error=True, thread=True )
+
 
 
     @work(thread=True, exclusive=True)
@@ -721,29 +732,27 @@ class Noteri(App):
     def cursor_moved(self, event:TextArea.SelectionChanged) -> None:
         self.print_footer()
 
-    def _update_markdown_worker(self):
-        text = self.markdown_updates.pop()
-        while text:
-            self.query_one("#markdown", expect_type=Markdown).update(text)
-            try:
-                text = self.markdown_updates.pop()
-            except IndexError:
-                text = None
-
-
-    def update_markdown(self, text):
-        self.markdown_updates.append(text)
-        self._update_markdown_worker()
-        #create a timer to update the markdown in case of rapid typing
-
-    @on(TextArea.Changed)
-    def text_area_changed(self, event:TextArea.Changed) -> None:
+    @work(thread=True, exclusive=True)
+    @on (TextArea.Changed, "#text_area")
+    def on_text_area_changed(self, event:TextArea.Changed) -> None:
         self.history_counter += 1
-        self.unsaved_changes = True
-        self.update_markdown(event.text_area.text)
+        self.unsaved_changes = False
 
+        with self.write_lock:
+            self.unprinted_changes = True
+        #self.unprinted_changes = True
         if self.history_counter > 5:
             self.add_history()
+
+    def _update_markdown_worker(self):
+        while self.app.is_running:
+            if self.unprinted_changes:
+                with self.write_lock:
+                    if self.unprinted_changes:
+                            self.unprinted_changes = False
+                            self.call_next(self.markdown.update, self.ta.text)
+                            #self.notify("Updated")
+            time.sleep(2)
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event:DirectoryTree.FileSelected):
@@ -762,7 +771,9 @@ class Noteri(App):
         href = message.href.replace("%20", " ")
         #href = message.href
         if href[0] == "#":
-            self.query_one("#markdown", expect_type=Markdown).goto_anchor(href[1:])
+            self.notify(f"Go to Anchor {href}")
+            self.notify(f"table {self.markdown._table_of_contents}")
+            self.markdown.goto_anchor(href[1:])
             return
         if href.startswith("http"):
             self.notify(f"Opening external link {href}")
@@ -1213,6 +1224,7 @@ class Noteri(App):
             # Check if the line is not just whitespace and doesn't already start with a number followed by a dot and a space
             if line.strip() and not line.lstrip().startswith(tuple(f"{i}." for i in range(1, 10))):
                 line = f"1. {line}"
+            refactored_lines.append(line)
 
         self.ta.replace('\n'.join(refactored_lines), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
