@@ -356,7 +356,7 @@ class ExtendedTextArea(TextArea):
                 space = 3
                 match_start = match.start() + space
                 self.move_cursor_relative(columns=match_start)
-                self.notify(f"Moving cursor forward to {match_start}. Searched from {str(start)} to {str(end)}")
+                #self.notify(f"Moving cursor forward to {match_start}. Searched from {str(start)} to {str(end)}")
                 return True
         else:
             # When moving backwards, we need to find the pipe that comes before the cursor's current position
@@ -672,6 +672,7 @@ class Noteri(App):
         for scm_file in Path(SCM_PATH).glob("*.scm"):
             self.app.ta.register_language(get_language(scm_file.stem), scm_file.read_text())
         self.markdown = Markdown(id="markdown")
+        #self.table_of_contents = Markdown(id="table_of_contents")
         
         #Find  Binding("ctrl+x", "delete_line", "delete line", show=False) in self.ta., and remove it
         self.app.ta.BINDINGS = [b for b in self.ta.BINDINGS if b.key != "ctrl+x"]
@@ -684,6 +685,7 @@ class Noteri(App):
                 with Vertical(id="md"):
                     yield Markdown("", id="title")
                     with ScrollableContainer():
+                        #yield self.table_of_contents
                         yield self.markdown
                         yield Markdown(id="backlinks")
                         #yield RadioButton(id="todo")
@@ -751,7 +753,6 @@ class Noteri(App):
                     if self.unprinted_changes:
                             self.unprinted_changes = False
                             self.call_next(self.markdown.update, self.ta.text)
-                            #self.notify("Updated")
             time.sleep(2)
 
     @on(DirectoryTree.FileSelected)
@@ -767,12 +768,8 @@ class Noteri(App):
     def linked_clicked(self, message:Markdown.LinkClicked ):
         self.toggle_class("DirectoryTree")
         #read first character of path
-
-        href = message.href.replace("%20", " ")
-        #href = message.href
+        href = message.href
         if href[0] == "#":
-            self.notify(f"Go to Anchor {href}")
-            self.notify(f"table {self.markdown._table_of_contents}")
             self.markdown.goto_anchor(href[1:])
             return
         if href.startswith("http"):
@@ -841,6 +838,10 @@ class Noteri(App):
             path = Path(self.filename).parent / href
 
         self.open_file(path)
+
+    # @on(Markdown.TableOfContentsUpdated)
+    # def table_of_contents_updated(self, message:Markdown.TableOfContentsUpdated):
+    #     self.table_of_contents.update(self.generate_table_of_contents(message.table_of_contents))
 
     def _update_backlinks_helper(self, path:Path):
         glob = list(Path(path).glob("./*"))
@@ -1181,24 +1182,44 @@ class Noteri(App):
             return
         self.push_screen(MarkdownTablePopup(self.create_table, validators=[Length(minimum=1)]))
 
+    def generate_table_of_contents(self, table_of_contents):
+
+        # _table_of_contents is (level, id, block_number)
+        table_of_contents_lines = []
+        previous_level = 1
+        for header in table_of_contents:
+            level = header[0]
+            id = header[1]
+            block_number = header[2]
+            if previous_level < level - 1:
+                for l in range(previous_level, level -1):
+                    table_of_contents_lines.append(f"{'  '* (l - 1)}- |")
+            table_of_contents_lines.append(f"{'  ' * (level - 1)}- [{id}](#{id})")
+            previous_level = level
+
+        return "\n".join(table_of_contents_lines)
+
+
     def action_table_of_contents(self):
 
-        # generate a talbe of contents for the current file and insert in current cursor location
-        # get all headers
-        toc = []
-        lines = self.ta.text.split('\n')
-        previous_level = 1
-        for line in lines:
-            match = re.match(r'(#+) (.+)', line)
-            if match:
-                level = len(match.group(1))
-                if previous_level < level:
-                    for l in range(previous_level, level -1):
-                        toc.append(f"{'  ' * (l - 1)}-  |")
-                previous_level = level
-                title = match.group(2).strip()
-                toc.append(f"{'  ' * (level - 1)}- [{title}](#{title.replace(' ', '-').lower()})")
-        self.ta.replace('\n'.join(toc), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
+        # # generate a talbe of contents for the current file and insert in current cursor location
+        # # get all headers
+        # toc = []
+        # lines = self.ta.text.split('\n')
+        # previous_level = 1
+        # for line in lines:
+        #     match = re.match(r'(#+) (.+)', line)
+        #     if match:
+        #         level = len(match.group(1))
+        #         if previous_level < level:
+        #             for l in range(previous_level, level -1):
+        #                 toc.append(f"{'  ' * (l - 1)}-  |")
+        #         previous_level = level
+        #         title = match.group(2).strip()
+        #         toc.append(f"{'  ' * (level - 1)}- [{title}](#{title.replace(' ', '-').lower()})")
+        # self.ta.replace('\n'.join(toc), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
+
+        self.ta.replace(self.generate_table_of_contents(self.markdown._table_of_contents), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
         # get all links
 
     def action_bullet_list(self):
