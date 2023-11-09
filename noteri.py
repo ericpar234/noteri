@@ -129,6 +129,7 @@ class FileCommands(Provider):
             "Strikethrough": partial(app.action_strikethrough),
             "Horizontal Rule": partial(app.action_horizontal_rule),
             "Table of Contents": partial(app.action_table_of_contents),
+            "Directory Table of Contents": partial(app.action_directory_table_of_contents),
             "Heading 1": partial(app.action_heading, 1),
             "Heading 2": partial(app.action_heading, 2),
             "Heading 3": partial(app.action_heading, 3),
@@ -649,11 +650,8 @@ class Noteri(App):
         self.history_counter = 0
         self.markdown_updates = []
         self.write_lock = threading.Lock()
-        self.read_lock = threading.Lock()
-        self.last_write_time = 0
         self.unprinted_changes = True
-
-        self.worker_thread = None
+        self.last_find = ""
 
         path = Path(path)
         if path.is_file():
@@ -701,34 +699,42 @@ class Noteri(App):
         self.print_footer()
         #self.query_one("#radio_buttons", expect_type=RadioButton).display = False
         self.run_worker(self._update_markdown_worker, exit_on_error=True, thread=True )
+        self.run_worker(self._update_footer_worker, exit_on_error=True, thread=True)
 
 
+    def _update_footer_worker(self):
+        while self.app.is_running:
+            if self.unprinted_footer:
+                unsaved_char = ""
+                if self.unsaved_changes:
+                    unsaved_char = "*"
+
+                filename = self.filename
+                if self.filename is None:
+                    filename = "New File"
+                
+                language = self.ta.language
+                    
+                if language is None:
+                    language = "Plain Text"
+
+                selected_text = self.ta.selected_text
+                #calculate selection width
+                cursor_width = ""
+                if len(selected_text) > 0:
+                    cursor_width = f" : {len(selected_text)}"
+
+                cursor_location = self.ta.cursor_location
+                self.query_one("#footer", expect_type=Label).update( 
+                f"{self.selected_directory} | {unsaved_char}{filename} | {language} | {str(cursor_location)}{cursor_width}"
+                )
+                self.unprinted_footer = False
+
+            time.sleep(1)
 
     @work(thread=True, exclusive=True)
     def print_footer(self):
-        unsaved_char = ""
-        if self.unsaved_changes:
-            unsaved_char = "*"
-
-        filename = self.filename
-        if self.filename is None:
-            filename = "New File"
-        
-        language = self.ta.language
-            
-        if language is None:
-            language = "Plain Text"
-
-        selected_text = self.ta.selected_text
-        #calculate selection width
-        cursor_width = ""
-        if len(selected_text) > 0:
-            cursor_width = f" : {len(selected_text)}"
-
-        cursor_location = self.ta.cursor_location
-        self.query_one("#footer", expect_type=Label).update( 
-        f"{self.selected_directory} {unsaved_char}{filename} | {language} | {str(cursor_location)}{cursor_width}"
-        )
+        self.unprinted_footer = True
 
     @on(TextArea.SelectionChanged)
     def cursor_moved(self, event:TextArea.SelectionChanged) -> None:
@@ -738,10 +744,10 @@ class Noteri(App):
     @on (TextArea.Changed, "#text_area")
     def on_text_area_changed(self, event:TextArea.Changed) -> None:
         self.history_counter += 1
-        self.unsaved_changes = False
+        self.unsaved_changes = True
 
-        with self.write_lock:
-            self.unprinted_changes = True
+        # with self.write_lock:
+        self.unprinted_changes = True
         #self.unprinted_changes = True
         if self.history_counter > 5:
             self.add_history()
@@ -832,16 +838,13 @@ class Noteri(App):
 
         #get subdirectory of filepath
         #path = Path(self.filename).parent / href
+        href = str(href).replace("%20", " ")
         if message.markdown.id == "backlinks":
             path = Path(href)
         else:
             path = Path(self.filename).parent / href
 
         self.open_file(path)
-
-    # @on(Markdown.TableOfContentsUpdated)
-    # def table_of_contents_updated(self, message:Markdown.TableOfContentsUpdated):
-    #     self.table_of_contents.update(self.generate_table_of_contents(message.table_of_contents))
 
     def _update_backlinks_helper(self, path:Path):
         glob = list(Path(path).glob("./*"))
@@ -1201,26 +1204,24 @@ class Noteri(App):
 
 
     def action_table_of_contents(self):
-
-        # # generate a talbe of contents for the current file and insert in current cursor location
-        # # get all headers
-        # toc = []
-        # lines = self.ta.text.split('\n')
-        # previous_level = 1
-        # for line in lines:
-        #     match = re.match(r'(#+) (.+)', line)
-        #     if match:
-        #         level = len(match.group(1))
-        #         if previous_level < level:
-        #             for l in range(previous_level, level -1):
-        #                 toc.append(f"{'  ' * (l - 1)}-  |")
-        #         previous_level = level
-        #         title = match.group(2).strip()
-        #         toc.append(f"{'  ' * (level - 1)}- [{title}](#{title.replace(' ', '-').lower()})")
-        # self.ta.replace('\n'.join(toc), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
-
         self.ta.replace(self.generate_table_of_contents(self.markdown._table_of_contents), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
         # get all links
+    
+    def action_directory_table_of_contents(self):
+        #generate a links to all files in directory, not including the current file
+
+        lines = []
+
+        #get all files in directory
+        for file in self.selected_directory.glob("./*"):
+            if file.is_dir():
+                continue
+            if file.name == self.filename.name:
+                continue
+            if file.name.endswith(".md"):
+                file_link = str(file.name).replace(" ", "%20")
+                lines.append(f"- [{file.name}]({file_link})")
+        self.ta.replace("\n".join(lines), self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def action_bullet_list(self):
         
@@ -1287,13 +1288,15 @@ class Noteri(App):
         self.ta.replace(f"{'#' * level} {self.ta.selected_text}", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def action_find(self):
-        self.app.push_screen(InputPopup(self.find_text, title="Find", validators=[Length(minimum=1)]))
+        self.app.push_screen(InputPopup(self.find_text, title="Find", validators=[Length(minimum=1)], default=self.last_find))
         pass
     
     def action_strikethrough(self):
         self.ta.replace(f"~~{self.ta.selected_text}~~", self.ta.selection.start, self.ta.selection.end, maintain_selection_offset=False)
 
     def find_text(self, search_text):
+
+        self.last_find = search_text
         
         cursor_location = self.ta.cursor_location
 
@@ -1306,10 +1309,12 @@ class Noteri(App):
         col = -1
         row = -1
         tmp_find_col = -1
-        split_lines[0] = split_lines[0][cursor_location[1]:]
+        split_lines[cursor_location[0]] = split_lines[cursor_location[0]][cursor_location[1] + 1:]
         for i, line in enumerate(split_lines[cursor_location[0]:]):
             tmp_find_col = line.find(search_text)
             if tmp_find_col != -1:
+                if i == 0:
+                    tmp_find_col += cursor_location[1] + 1
                 col = tmp_find_col
                 break
         row = i + cursor_location[0]
