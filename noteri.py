@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button, Footer, MarkdownViewer
+from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button, Footer, MarkdownViewer, Tree
 from textual.widgets.text_area import LanguageDoesNotExist
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
@@ -329,16 +329,13 @@ class ExtendedTextArea(TextArea):
         text = self.get_text_range(self.get_cursor_line_start_location(), self.cursor_location)
 
         if not self.selected_text == "":
-            self.notify("Selected text")
             return False
 
         if not text.startswith("|"):
-            self.notify("Starts with")
             return False
 
         # if in markdown table go to next cell
         if not self.language == "markdown":
-            self.notify("Markdown")
             return False
 
         cursor = self.cursor_location
@@ -416,6 +413,13 @@ class ExtendedTextArea(TextArea):
             return
 
         if self.selected_text == "":
+            before_cursor = self.get_text_range(self.get_cursor_line_start_location(), self.cursor_location)
+            # check to see if - exists with arbitrary whitespace before
+            if re.match(r'\s*-\s', before_cursor):
+                self.insert((" " * spaces), start_location)
+                self.notify("Match")
+                return
+
             self.insert(" " * spaces)
         else:
             selection = self.selection
@@ -653,6 +657,9 @@ class Noteri(App):
         self.unprinted_changes = True
         self.last_find = ""
 
+        self.expand_lock = threading.Lock()
+        self.allowed_to_expand = True
+
         path = Path(path)
         if path.is_file():
             self.filename = path
@@ -676,17 +683,17 @@ class Noteri(App):
         self.app.ta.BINDINGS = [b for b in self.ta.BINDINGS if b.key != "ctrl+x"]
         self.app.ta.action_delete_line = self.action_cut
         self.app.ta.delete_word_right = self.action_find
-        with Vertical():
-            with Horizontal():
-                yield DirectoryTree(self.directory)
-                yield self.ta
-                with Vertical(id="md"):
-                    yield Markdown("", id="title")
-                    with ScrollableContainer():
-                        #yield self.table_of_contents
-                        yield self.markdown
-                        yield Markdown(id="backlinks")
-                        #yield RadioButton(id="todo")
+        #with Vertical():
+        with Horizontal():
+            yield DirectoryTree(self.directory)
+            yield self.ta
+            with Vertical(id="md"):
+                yield Markdown("", id="title")
+                with ScrollableContainer(id = "scrollable_markdown"):
+                    #yield self.table_of_contents
+                    yield self.markdown
+                    yield Markdown(id="backlinks")
+                    #yield RadioButton(id="todo")
 
         yield Label(id="footer")
 
@@ -763,11 +770,18 @@ class Noteri(App):
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event:DirectoryTree.FileSelected):
+        with self.expand_lock:
+            if not self.allowed_to_expand:
+                return
+
         self.open_file(event.path)
         self.unsaved_changes = False
 
     @on(DirectoryTree.DirectorySelected)
     def directory_selected(self, event:DirectoryTree.DirectorySelected):
+        with self.expand_lock:
+            if not self.allowed_to_expand:
+                return
         self.selected_directory = (event.path)
 
     @on(Markdown.LinkClicked)
@@ -963,6 +977,8 @@ class Noteri(App):
         self.configure_widths()
 
         self.unsaved_changes = False
+        self.unprinted_footer = True
+        self.unprinted_changes  = True
         
     def toggle_widget_display(self, id):
         widget = self.query_one(id)
@@ -1005,31 +1021,49 @@ class Noteri(App):
         title.display = markdown.display
         backlinks.display = markdown.display
 
-    def _refresh_directory_tree_helper(self, search_text, node):
-        if node.data.path.is_dir():
-            for child in node.children:
-                self._refresh_directory_tree_helper(search_text, child)
-        else:
-            if search_text == "":
-                node.display = True
-            else:
-                if search_text in node.data.path.name:
-                    node.display = True
-                else:
-                    node.display = False
+    # def _refresh_directory_tree_helper(self, search_text, node):
+    #     if node.data.path.is_dir():
+    #         for child in node.children:
+    #             self._refresh_directory_tree_helper(search_text, child)
+    #     else:
+    #         if search_text == "":
+    #             node.display = True
+    #         else:
+    #             if search_text in node.data.path.name:
+    #                 node.display = True
+    #             else:
+    #                 node.display = False
 
 
     @work(exclusive=True)
     async def refresh_directory_tree(self):
+
+        with self.expand_lock:
+            self.allowed_to_expand = False
+
+        #self.dt.root.toggle_all()
+
+
+        node = self.dt.cursor_node
+        line  = self.dt.cursor_line
+        self.notify(f"Child len {len(self.dt.children)}")
+
+
         await self.dt.reload_node(self.dt.root)
 
-        children = []
+        #self.dt.root.toggle_all()
 
-        #self._refresh_directory_tree_helper(self.)
+        #node = self.dt.get_node_by_id(id)
+        node = self.dt.get_node_at_line(line)
         
-        
-        #self.node.expand()
-        return
+        if node != None:
+            self.dt.select_node(node)
+        else:
+            self.notify(f"Could not find id {line}")
+            self.notify(f"Child len {len(self.dt.children)}")
+
+        with self.expand_lock:
+            self.allowed_to_expand = True
 
     def new_file(self, file_name):
         with open(file_name, "w") as f:
@@ -1049,9 +1083,12 @@ class Noteri(App):
             f.write(self.ta.text)
         self.notify(f"Saved {filename}", title="Saved")
         self.filename = filename
-        self.dt.reload_node(self.dt.root)
+        
+        self.refresh_directory_tree()
+
         self.unsaved_changes = False
-        self.print_footer()
+        self.unprinted_footer = True
+        self.unprinted_changes  = True
 
     def delete_file(self):
         if self.dt.cursor_node.data.path.is_dir():
@@ -1074,12 +1111,12 @@ class Noteri(App):
         if path.is_dir():
             # move directory
             os.rename(str(path), new_filename)
-            self.dt.watch_tree()
+            self.dt.watch_path()
         elif path.is_file():
             tmp = self.filename
             self.save_file(new_filename)
             os.remove(tmp)
-            self.dt.watch_tree()
+            self.dt.watch_path()
         return
         
     def create_table(self, rows, columns, header):
