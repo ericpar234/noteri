@@ -20,7 +20,7 @@ import argparse
 from tree_sitter_languages import get_language
 import shutil
 import time
-
+from textual._slug import TrackedSlugs
 
 
 SCM_PATH = "venv/lib/python3.11/site-packages/textual/tree-sitter/highlights/"
@@ -430,22 +430,22 @@ class ExtendedTextArea(TextArea):
             text = "\n".join(new_lines)
             self.replace(text, selection.start, selection.end)
 
-    def _continue_list(self, previous_line) -> None:
+    def _continue_list(self, this_line) -> None:
 
         # if - or 1. continue list with same amount of whitespace as found string
-        leading_whitespace = re.match(r'(\s*)', previous_line).group(1)
+        leading_whitespace = re.match(r'(\s*)', this_line).group(1)
 
-        match = re.match(r'\s*-\s\[\s\]\s[^\s]*', previous_line)  # Check for todo list
+        match = re.match(r'\s*-\s\[\s\]\s[^\s]*', this_line)  # Check for todo list
         if match:
             return f'\n{leading_whitespace}- [ ] '
 
         # Determine the type of list from the previous line
-        match = re.match(r'\s*(\d+)\.\s[^\s]', previous_line)  # Check for numbered list
+        match = re.match(r'\s*(\d+)\.\s[^\s]', this_line)  # Check for numbered list
         if match:
             next_number = int(match.group(1)) + 1
             return f'\n{leading_whitespace}{next_number}. '
 
-        match = re.match(r'\s*-\s[^\s]', previous_line)  # Check for bulleted list
+        match = re.match(r'\s*-\s[^\s]', this_line)  # Check for bulleted list
         if match:
             return f'\n{leading_whitespace}- '
 
@@ -471,16 +471,16 @@ class ExtendedTextArea(TextArea):
         else:
             next_line_match = False
 
-        #TODO: Hack
-        previous_line = self.document.get_line(self.cursor_location[0] - 1)
+        # #TODO: Hack
+        this_line = self.document.get_line(self.cursor_location[0])
 
         # Check if the previous line is a table row and the next line is not
-        if table_row_re.match(previous_line) and not next_line_match:
+        if table_row_re.match(this_line) and not next_line_match:
             # Split the previous line into columns, taking into account leading and trailing spaces within the cells
             # We also maintain the outer spaces outside the first and last pipe
-            leading_spaces = previous_line[:previous_line.find('|')]
-            trailing_spaces = previous_line[previous_line.rfind('|')+1:]
-            columns = previous_line.strip().split('|')[1:-1]  # Exclude the first and last empty elements after strip
+            leading_spaces = this_line[:this_line.find('|')]
+            trailing_spaces = this_line[this_line.rfind('|')+1:]
+            columns = this_line.strip().split('|')[1:-1]  # Exclude the first and last empty elements after strip
             
             # Create a new row that maintains the same spacing as the previous row's columns
             new_row = leading_spaces + '\n|' + '|'.join(' ' * len(col) for col in columns) + '|' + trailing_spaces
@@ -790,7 +790,9 @@ class Noteri(App):
         #read first character of path
         href = message.href
         if href[0] == "#":
-            self.markdown.goto_anchor(href[1:])
+            tag = href[1:].replace("%20", " ")
+            if not self.markdown.goto_anchor(href[1:].replace("%20", " ")):
+                self.notify(f"Anchor {tag} not found", severity="error", title="Anchor Not Found")
             return
         if href.startswith("http"):
             self.notify(f"Opening external link {href}")
@@ -1227,14 +1229,19 @@ class Noteri(App):
         # _table_of_contents is (level, id, block_number)
         table_of_contents_lines = []
         previous_level = 1
+        self.notify(str(table_of_contents))
+        slugs = TrackedSlugs()
         for header in table_of_contents:
             level = header[0]
             id = header[1]
             block_number = header[2]
             if previous_level < level - 1:
                 for l in range(previous_level, level -1):
-                    table_of_contents_lines.append(f"{'  '* (l - 1)}- |")
-            table_of_contents_lines.append(f"{'  ' * (level - 1)}- [{id}](#{id})")
+                    table_of_contents_lines.append(f"{'  '* (l - 1)}- ")
+
+            #github slug
+            tag = slugs.slug(id)
+            table_of_contents_lines.append(f"{'  ' * (level - 1)}- [{id}](#{tag})")
             previous_level = level
 
         return "\n".join(table_of_contents_lines)
