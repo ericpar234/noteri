@@ -5,27 +5,34 @@ DirectoryTree {
 }
 
 #md {
-    width: 50%;
+    width: 100%;
+}
+
+#title {
+    width: 100%;
+    align: center middle;
 }
 
 ScrollableContainer {
-    scrollbar-gutter: stable;
+    scrollbar-gutter: auto;
     scrollbar-size: 1 1;
 }
 
+#scrollable_markdown {
+    width: 100%
+}
+
 #markdown {
-    width: 100%;
     height: auto;
+}
+#backlinks {
+    width: 100%;
 }
 
 TextArea {
     width: 100%;
     scrollbar-size: 1 1;
-    scrollbar-size-horizontal: 1;
-}
-
-#title {
-    align: center middle;
+    scrollbar-size-vertical: 1;
 }
 
 #footer {
