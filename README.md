@@ -17,7 +17,7 @@ pip install -r requirements
 
 ### Markdown Viewer
 
-View markdown documents. Will search for backlinks in path.
+View markdown documents. Will search for backlinks in path. Prints title at top of documents.
 
 ### Command Pallet
 
@@ -40,6 +40,12 @@ View markdown documents. Will search for backlinks in path.
 `Rename`: Change the name of the file.
 
 #### Markdown Editor
+`Copy`: Copy selection to clipboard.
+
+`Cut`: Cut from file into clipboard.
+
+`Paste`: Paste from clipboard into file.
+
 `Link [FILE PATH]`: Link another file
 
 `Table`: Create a table. With nothing selected, prompts user for row and column size. With selection, will format a table to look nice. Support for tab and return in table.
