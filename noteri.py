@@ -765,8 +765,16 @@ class Noteri(App):
                 with self.write_lock:
                     if self.unprinted_changes:
                             self.unprinted_changes = False
-                            self.call_next(self.markdown.update, self.ta.text)
+                            self.call_after_refresh(self._update_markdown)
+
             time.sleep(2)
+
+    async def _update_markdown(self):
+        sc = self.query_one("#scrollable_markdown", expect_type=ScrollableContainer)
+        x = sc.scroll_x
+        y = sc.scroll_y
+        await self.markdown.update(self.ta.text)
+        sc.scroll_to(x, y, animate=False)
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event:DirectoryTree.FileSelected):
@@ -974,8 +982,9 @@ class Noteri(App):
 
         self.history.clear()
         self.history_index = 0
-        self.add_history()
-        
+
+        self.call_later(self.add_history)
+
         self.configure_widths()
 
         self.unsaved_changes = False
@@ -1048,7 +1057,6 @@ class Noteri(App):
 
         node = self.dt.cursor_node
         line  = self.dt.cursor_line
-        self.notify(f"Child len {len(self.dt.children)}")
 
 
         await self.dt.reload_node(self.dt.root)
@@ -1061,8 +1069,9 @@ class Noteri(App):
         if node != None:
             self.dt.select_node(node)
         else:
+            
             self.notify(f"Could not find id {line}")
-            self.notify(f"Child len {len(self.dt.children)}")
+            #self.notify(f"Child len {len(self.dt.children)}")
 
         with self.expand_lock:
             self.allowed_to_expand = True
@@ -1389,6 +1398,10 @@ class Noteri(App):
             self.history = self.history[:self.history_index + 1]
             #self.notify("Remove forward history")
         else:
+            if len(self.history) > 0:
+                if  self.history[-1]["text"] == self.ta.text:
+                    return
+                #self.notify("Replace history")
             self.history.append({ "text": self.ta.text, 
                                   "cursor_location": self.ta.cursor_location})
         self.history_index += 1
@@ -1402,20 +1415,21 @@ class Noteri(App):
 
     def action_undo(self):
         
-        #self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
+        self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
 
         if self.history_index > 0:
+            if self.history_index == len(self.history) -1:
+              self.add_history()
             self.history_index -= 1
             self.history_disabled = True
-            self.add_history()
             self.ta.load_text(self.history[self.history_index]["text"])
             self.ta.cursor_location = self.history[self.history_index]["cursor_location"]
             self.history_counter = -1
         
-        self.history_disabled = False
+            self.history_disabled = False
 
-        if self.history_index == 0:
-            self.add_history()
+            if self.history_index == 0 and len(self.history) == 0:
+                self.add_history()
 
     def action_redo(self):
         
