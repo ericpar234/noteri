@@ -159,8 +159,8 @@ class MarkdownTablePopup(ModalScreen):
         self.validators = validators
 
     def compose(self) -> ComposeResult:
-        yield Label("Header")
-        yield Switch(id="header")
+        #yield Label("Header")
+        #yield Switch(id="header")
         yield Label("Rows")
         yield Input(validators=self.validators, id="rows")
         yield Label("Columns")
@@ -170,8 +170,7 @@ class MarkdownTablePopup(ModalScreen):
     def submitted(self, event:Input.Submitted):
         rows = int(self.query_one("#rows", expect_type=Input).value)
         columns = int(self.query_one("#columns", expect_type=Input).value)
-        header = self.query_one("#header", expect_type=Switch).value
-        self.app.post_message(Noteri.FileSystemCallback(self.callback, (rows, columns, header)))
+        self.app.post_message(Noteri.FileSystemCallback(self.callback, (rows, columns)))
         self.app.pop_screen()
 
 class InputPopup(ModalScreen):
@@ -770,11 +769,18 @@ class Noteri(App):
             time.sleep(2)
 
     async def _update_markdown(self):
-        sc = self.query_one("#scrollable_markdown", expect_type=ScrollableContainer)
-        x = sc.scroll_x
-        y = sc.scroll_y
+        sc = None
+        try:
+            sc = self.app.query_one("#scrollable_markdown", expect_type=ScrollableContainer)
+            x = sc.scroll_x
+            y = sc.scroll_y
+        except:
+            pass
+
         await self.markdown.update(self.ta.text)
-        sc.scroll_to(x, y, animate=False)
+
+        if sc is not None:
+            sc.scroll_to(x, y, animate=False)
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event:DirectoryTree.FileSelected):
@@ -1069,7 +1075,6 @@ class Noteri(App):
         if node != None:
             self.dt.select_node(node)
         else:
-            
             self.notify(f"Could not find id {line}")
             #self.notify(f"Child len {len(self.dt.children)}")
 
@@ -1130,14 +1135,14 @@ class Noteri(App):
             self.dt.watch_path()
         return
         
-    def create_table(self, rows, columns, header):
+    def create_table(self, rows, columns):
         self.add_history()
         
         self.history_counter
         insert_text = ""
-        if header:
-            insert_text += f"|   {'|   '.join([''] * columns)}|\n"
-            insert_text += f"|{'|'.join(['---'] * columns)}|\n"
+
+        insert_text += f"|   {'|   '.join([''] * columns)}|\n"
+        insert_text += f"|{'|'.join(['---'] * columns)}|\n"
 
         for i in range(rows):
             row_text = f"|   {'|   '.join([''] * columns)}|\n"
@@ -1393,7 +1398,8 @@ class Noteri(App):
         ta = self.query_one("TextArea", TextArea)
         if self.history_index < len(self.history) - 1:
             self.history[self.history_index] = { "text": self.ta.text, 
-                                                 "cursor_location": self.ta.cursor_location}
+                                                 "cursor_location": self.ta.cursor_location,
+                                                 "scroll_location": (self.ta.scroll_x, self.ta.scroll_y)}
             #remove forward history
             self.history = self.history[:self.history_index + 1]
             #self.notify("Remove forward history")
@@ -1403,7 +1409,9 @@ class Noteri(App):
                     return
                 #self.notify("Replace history")
             self.history.append({ "text": self.ta.text, 
-                                  "cursor_location": self.ta.cursor_location})
+                                  "cursor_location": self.ta.cursor_location,
+                                  "scroll_location": (self.ta.scroll_x, self.ta.scroll_y)})
+
         self.history_index += 1
         self.history_counter = 0
         #self.notify(f"add history. {self.history_index} {len(self.history)}")
@@ -1424,6 +1432,7 @@ class Noteri(App):
             self.history_disabled = True
             self.ta.load_text(self.history[self.history_index]["text"])
             self.ta.cursor_location = self.history[self.history_index]["cursor_location"]
+            self.ta.scroll_to(self.history[self.history_index]["scroll_location"][0], self.history[self.history_index]["scroll_location"][1], animate=False)
             self.history_counter = -1
         
             self.history_disabled = False
@@ -1439,6 +1448,7 @@ class Noteri(App):
             self.history_disabled = True
             self.ta.load_text(self.history[self.history_index]["text"])
             self.ta.cursor_location = self.history[self.history_index]["cursor_location"]
+            self.ta.scroll_to(self.history[self.history_index]["scroll_location"][0], self.history[self.history_index]["scroll_location"][1], animate=False)
             self.history_counter = -1
         self.history_disabled = False
 
