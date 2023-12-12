@@ -761,11 +761,10 @@ class Noteri(App):
     def _update_markdown_worker(self):
         while self.app.is_running:
             if self.unprinted_changes:
-                with self.write_lock:
-                    if self.unprinted_changes:
+                if self.unprinted_changes:
+                        if self.ta.language == "markdown":
                             self.unprinted_changes = False
                             self.call_after_refresh(self._update_markdown)
-
             time.sleep(2)
 
     async def _update_markdown(self):
@@ -777,7 +776,8 @@ class Noteri(App):
         except:
             pass
 
-        await self.markdown.update(self.ta.text)
+        if self.ta.language == "markdown":
+            await self.markdown.update(self.ta.text)
 
         if sc is not None:
             sc.scroll_to(x, y, animate=False)
@@ -969,21 +969,20 @@ class Noteri(App):
         else:
             self.ta.language = None
 
-        md = self.query_one("#markdown", expect_type=Markdown)
         title = self.query_one("#title", expect_type=Markdown)
         backlinks = self.query_one("#backlinks", expect_type=Markdown)
 
         if path.suffix == ".md":
-            md.display = True
+            self.markdown.display = True
             title.display = True
             backlinks.display = True
-            md.update(text)
+            #self.md.update(text)
             title.update("## " + str(self.filename.parts[-1])[:-3])
             self.update_backlinks()
 
         else:
             title.display = False
-            md.display = False
+            self.markdown.display = False
             backlinks.display = False
 
         self.history.clear()

@@ -10,7 +10,7 @@ DirectoryTree {
 
 #title {
     width: 100%;
-    align: center middle;
+    align: center top;
 }
 
 ScrollableContainer {
