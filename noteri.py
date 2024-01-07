@@ -321,7 +321,11 @@ class ExtendedTextArea(TextArea):
         return
 
     def _insert_bookend_pair(self, bookend_start: str, bookend_end: str,  only_selection = False) -> None:
-        self.selected_text
+
+        if self.selected_text == "" and only_selection:
+            self.insert(bookend_start)
+            return
+
         if self.selected_text == "" and not only_selection:
             
             #check if surrounding text is already a pair
@@ -578,7 +582,7 @@ class ExtendedTextArea(TextArea):
             self._insert_bookend_pair('"', '"')
             event.prevent_default()
         elif event.character == "`":
-            self._insert_bookend_pair("`", "`")
+            self._insert_bookend_pair("`", "`", only_selection=True)
             event.prevent_default()
         elif event.character == "<":
             self._insert_bookend_pair("<", ">")
