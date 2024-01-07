@@ -806,7 +806,7 @@ class Noteri(App):
                         if self.ta.language == "markdown":
                             self.unprinted_changes = False
                             self.call_after_refresh(self._update_markdown)
-            time.sleep(2)
+            time.sleep(1)
 
     async def _update_markdown(self):
         sc = None
@@ -1036,7 +1036,8 @@ class Noteri(App):
         self.unsaved_changes = False
         self.unprinted_footer = True
         self.unprinted_changes  = True
-        
+        self.call_after_refresh(self._update_markdown)
+
     def toggle_widget_display(self, id):
         widget = self.query_one(id)
 
