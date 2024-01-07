@@ -303,20 +303,38 @@ class ExtendedTextArea(TextArea):
         Binding("ctrl+k", "delete_to_end_of_line", "delete to line end", show=False),
     ]
 
+    def _skip_bookend_ends(self, bookend_start: str, bookend_end: str) -> None:
+        if self.selected_text == "":
+            start = self.cursor_location
+            start = (start[0], start[1]+1 )
+            end   = self.cursor_location
+            end   = (end[0], end[1])
+            self.notify("text: " + str(self.get_text_range(start, end)))
 
+            if self.get_text_range(start, end) == bookend_end:
+                self.move_cursor_relative(columns=1)
+                return
 
-    def _insert_bookend_pair(self, bookend_start: str, bookend_end: str, only_selection = False) -> None:
+        self.insert(bookend_end)
+        self.move_cursor_relative(columns=1)
+
+        return
+
+    def _insert_bookend_pair(self, bookend_start: str, bookend_end: str,  only_selection = False) -> None:
         self.selected_text
         if self.selected_text == "" and not only_selection:
+            
             #check if surrounding text is already a pair
             start = self.cursor_location
             start = (start[0], start[1] - 1)
             end   = self.cursor_location
-            end   = (end[0], end[1] + 1)
+            #end   = (end[0], end[1] + 1)
+            self.notify("text: " + str(self.get_text_range(start, end)))
 
-            if self.get_text_range(start, end) == bookend_start + bookend_end:
+            if self.get_text_range(start, end) == bookend_end:
                 self.move_cursor_relative(columns=1)
                 return
+
             self.insert(bookend_start + bookend_end)
             self.move_cursor_relative(columns=-1)
         else:
@@ -324,6 +342,8 @@ class ExtendedTextArea(TextArea):
             text = bookend_start + self.selected_text + bookend_end
             self.replace(text, selection.start, selection.end)
             #self.selection = (selection.start, selection.end + len(bookend_end + bookend_start))
+    
+    
     def _next_cell(self, forwards:bool) -> bool:
         text = self.get_text_range(self.get_cursor_line_start_location(), self.cursor_location)
 
@@ -568,6 +588,23 @@ class ExtendedTextArea(TextArea):
             event.prevent_default()
         elif event.character == "*":
             self._insert_bookend_pair("*", "*", only_selection = True)
+            event.prevent_default()
+
+        # check bookend ends
+        elif event.character == ")":
+            self._skip_bookend_ends("(", ")")
+            event.prevent_default()
+
+        elif event.character == "]":
+            self._skip_bookend_ends("[", "]")
+            event.prevent_default()
+
+        elif event.character == "}":
+            self._skip_bookend_ends("{", "}")
+            event.prevent_default()
+
+        elif event.character == ">":
+            self._skip_bookend_ends("<", ">")
             event.prevent_default()
 
         elif "shift+tab" in event.aliases:
