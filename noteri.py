@@ -1,5 +1,7 @@
+from markdown_it.token import Token
 from textual.app import App, ComposeResult
 from textual.widgets import Markdown, TextArea, Markdown, DirectoryTree, Markdown, Label, Input, Switch, Button, Footer, MarkdownViewer, Tree
+from textual.widgets._markdown import MarkdownBlock
 from textual.widgets.text_area import LanguageDoesNotExist
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
@@ -672,7 +674,12 @@ class Noteri(App):
 
 
     def compose(self) -> ComposeResult:
-        self.ta = ExtendedTextArea(id="text_area")
+        self.ta = ExtendedTextArea(id="text_area",
+        theme = "monokai",
+        soft_wrap = False,
+        tab_behaviour = "indent",
+        show_line_numbers = True)
+        
         for scm_file in Path(SCM_PATH).glob("*.scm"):
             self.app.ta.register_language(get_language(scm_file.stem), scm_file.read_text())
         self.markdown = Markdown(id="markdown")
