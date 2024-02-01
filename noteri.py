@@ -311,7 +311,6 @@ class ExtendedTextArea(TextArea):
             start = (start[0], start[1]+1 )
             end   = self.cursor_location
             end   = (end[0], end[1])
-            self.notify("text: " + str(self.get_text_range(start, end)))
 
             if self.get_text_range(start, end) == bookend_end:
                 self.move_cursor_relative(columns=1)
@@ -335,7 +334,6 @@ class ExtendedTextArea(TextArea):
             start = (start[0], start[1] - 1)
             end   = self.cursor_location
             #end   = (end[0], end[1] + 1)
-            self.notify("text: " + str(self.get_text_range(start, end)))
 
             if self.get_text_range(start, end) == bookend_end:
                 self.move_cursor_relative(columns=1)
@@ -400,7 +398,7 @@ class ExtendedTextArea(TextArea):
                 # between the match position and the end column position of the text before the cursor
                 cursor_move_distance = match_pos - end[1]
                 self.move_cursor_relative(columns=cursor_move_distance)
-                self.notify(f"Moving cursor backwards to {cursor_move_distance}. Searched from {str(start)} to {str(end)}")
+                #self.notify(f"Moving cursor backwards to {cursor_move_distance}. Searched from {str(start)} to {str(end)}")
                 return True
             
         self.notify(f"No match from {str(start)} to {str(end)}")
@@ -1291,7 +1289,7 @@ class Noteri(App):
         # _table_of_contents is (level, id, block_number)
         table_of_contents_lines = []
         previous_level = 1
-        self.notify(str(table_of_contents))
+        #self.notify(str(table_of_contents))
         slugs = TrackedSlugs()
         for header in table_of_contents:
             level = header[0]
@@ -1471,7 +1469,7 @@ class Noteri(App):
 
     def action_undo(self):
         
-        self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
+        #self.notify(f"Index: {self.history_index} Len History: {len(self.history)}")
 
         if self.history_index > 0:
             if self.history_index == len(self.history) -1:
