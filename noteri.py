@@ -138,6 +138,9 @@ class FileCommands(Provider):
             "Heading 4": partial(app.action_heading, 4),
             "Heading 5": partial(app.action_heading, 5),
             "Heading 6": partial(app.action_heading, 6),
+            "Undo": partial(app.action_undo),
+            "Redo": partial(app.action_redo),
+            "Close": partial(app.action_close),
 
         }
 
@@ -643,9 +646,12 @@ class Noteri(App):
         Binding("ctrl+r", "rename", "Rename File"),
         Binding("ctrl+d", "delete", "Delete File"),
         Binding("ctrl+shift+x", "cut", "Cut Text", priority=True),
-        #Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
-        Binding("ctrl+y", "copy", "Copy Text", priority=True),
+        Binding("ctrl+x", "cut", "Cut Text", priority=True),
         Binding("ctrl+shift+v", "paste", "Paste Text", priority=True),
+        Binding("ctrl+v", "paste", "Paste Text", priority=True),
+        Binding("ctrl+c", "copy", "Copy Text", priority=True),
+        Binding("ctrl+shift+c", "copy", "Copy Text", priority=True),
+        Binding("ctrl+f", "find", "Find Text", priority=True),
         Binding("ctrl+v", "paste", "Paste Text", priority=True),
         Binding("ctrl+f", "find", "Find Text", priority=True),
         Binding("ctrl+t", "table", "Create Table"),
@@ -1497,6 +1503,13 @@ class Noteri(App):
             self.ta.scroll_to(self.history[self.history_index]["scroll_location"][0], self.history[self.history_index]["scroll_location"][1], animate=False)
             self.history_counter = -1
         self.history_disabled = False
+
+    def action_exit(self):
+        if self.unsaved_changes:
+            self.action_stack.insert(0, self.app.exit)
+            self.push_screen(YesNoPopup("Unsaved Changes",  self.unsaved_changes_callback, message=f"Save Changes to {self.filename} ?"))
+            return
+        self.app.exit()
 
     def create_link(self, link:str=None, message=None, relative=True):
         
